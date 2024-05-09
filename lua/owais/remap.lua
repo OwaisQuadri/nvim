@@ -67,6 +67,6 @@ vim.keymap.set("n", "<leader>O", "O<Esc>")
 vim.keymap.set("n", "<leader>ps", "<Esc>:PackerSync\n")
 
 -- quit
-vim.keymap.set("n", "<leader>wq", "<Esc>:wq\n")
+vim.keymap.set("n", "<leader>q", "<Esc>:wq\n")
 
 
