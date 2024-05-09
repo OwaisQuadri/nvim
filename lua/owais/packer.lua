@@ -24,6 +24,7 @@ return require('packer').startup(function(use)
     use('theprimeagen/harpoon')
     use('mbbill/undotree')
     use('tpope/vim-fugitive')
+    use { 'nvim-tree/nvim-web-devicons' }
     use {
         'neovim/nvim-lspconfig',
         'williamboman/mason.nvim',
@@ -53,7 +54,10 @@ return require('packer').startup(function(use)
             end
         },
         use {
-            "airblade/vim-gitgutter"
+            "airblade/vim-gitgutter",
+            config = function()
+                require("vim-gitgutter").setup {}
+            end
         }
     }
     use {
@@ -62,5 +66,14 @@ return require('packer').startup(function(use)
             'nvim-lua/plenary.nvim',
             'stevearc/dressing.nvim', -- optional for vim.ui.select
         },
+        config = function()
+            require("flutter-tools").setup {}
+        end
+    }
+    use {
+        "sindrets/diffview.nvim",
+        config = function()
+            require("diffview").setup {}
+        end
     }
 end)

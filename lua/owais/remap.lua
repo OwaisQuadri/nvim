@@ -18,7 +18,7 @@ vim.keymap.set("n", "N", "Nzzzv")
 vim.keymap.set("v", "<leader>p", "\"_dP")
 
 -- duplicate line
-vim.keymap.set("n", "<leader>d", "yyp")
+vim.keymap.set("n", "<leader>dd", "yyp")
 
 -- copy to C-v
 vim.keymap.set("n", "<leader>y", "\"+y")
@@ -35,7 +35,8 @@ end)
 vim.keymap.set("n", "<leader>=", "$gg=GG")
 
 -- save
-vim.keymap.set({"n", "i", "v"}, "<C-s>", "<Esc>:w <bar> so\n")
+vim.keymap.set({"n", "i", "v"}, "<C-s>", "<Esc>:w\n")
+vim.keymap.set({"n", "i", "v"}, "<leader>s", "<Esc>:so\n")
 
 -- make script executable
 vim.keymap.set("n", "<leader>x", "<cmd>!chmod +x %<CR>")
@@ -64,5 +65,8 @@ vim.keymap.set("n", "<leader>O", "O<Esc>")
 
 -- packer-sync
 vim.keymap.set("n", "<leader>ps", "<Esc>:PackerSync\n")
+
+-- quit
+vim.keymap.set("n", "<leader>wq", "<Esc>:wq\n")
 
 
