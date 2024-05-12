@@ -76,4 +76,7 @@ return require('packer').startup(function(use)
             require("diffview").setup {}
         end
     }
+    use {
+        "keith/swift.vim"
+    }
 end)
