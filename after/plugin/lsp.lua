@@ -21,7 +21,22 @@ local lsp_capabilities = require('cmp_nvim_lsp').default_capabilities()
 
 require('mason').setup({})
 require('mason-lspconfig').setup({
-    ensure_installed = {  'tsserver', 'rust_analyzer' },
+    ensure_installed = { 'tsserver', 'rust_analyzer' },
+    automatic_installation = true,
+})
+
+local sourcekit_lsp_path = vim.fn.trim(vim.fn.system('xcrun --find sourcekit-lsp'))
+if vim.fn.empty(sourcekit_lsp_path) ~= 1 then
+    require('lspconfig')['sourcekit'].setup({
+        cmd = { sourcekit_lsp_path },
+        capabilities = lsp_capabilities,
+    })
+else
+    print("SourceKit-LSP is not installed. Please install it to enable Swift support.")
+end
+
+require('mason-lspconfig').setup({
+    ensure_installed = {  'tsserver', 'rust_analyzer'},
     handlers = {
         function(server_name)
             require('lspconfig')[server_name].setup({

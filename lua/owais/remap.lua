@@ -36,7 +36,7 @@ vim.keymap.set("n", "<leader>=", "$gg=GG")
 
 -- save
 vim.keymap.set({"n", "i", "v"}, "<C-s>", "<Esc>:w\n")
-vim.keymap.set({"n", "i", "v"}, "<leader>s", "<Esc>:so\n")
+vim.keymap.set({"n", "v"}, "<leader>s", "<Esc>:so\n")
 
 -- make script executable
 vim.keymap.set("n", "<leader>x", "<cmd>!chmod +x %<CR>")
