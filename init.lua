@@ -99,7 +99,7 @@ do
   vim.g.maplocalleader = ' '
 
   -- Set to true if you have a Nerd Font installed and selected in the terminal
-  vim.g.have_nerd_font = false
+  vim.g.have_nerd_font = true
 
   -- [[ Setting options ]]
   --  See `:help vim.o`
@@ -442,18 +442,18 @@ do
   -- change the command under that to load whatever the name of that colorscheme is.
   --
   -- If you want to see what colorschemes are already installed, you can use `:Telescope colorscheme`.
-  vim.pack.add { gh 'rose-pine/neovim' }
+  -- vim.pack.add { gh 'rose-pine/neovim' }
 
   -- Transparent background, to let Ghostty's translucent/glass background
   -- show through instead of nvim painting over it with an opaque color.
-  require('rose-pine').setup {
-    styles = {
-      transparency = true,
-    },
-  }
+  -- require('rose-pine').setup {
+  --  styles = {
+  --    transparency = true,
+    --},
+  --}
 
   -- Load the colorscheme here.
-  vim.cmd.colorscheme 'rose-pine'
+  -- vim.cmd.colorscheme 'rose-pine'
 
   -- Highlight todo, notes, etc in comments
   vim.pack.add { gh 'folke/todo-comments.nvim' }
@@ -1159,6 +1159,49 @@ do
       },
     },
   }
+end
+
+-- ============================================================
+-- SECTION 16: SAVING -- SAVE-ALL SHORTCUT AND CONSERVATIVE AUTOSAVE
+-- ============================================================
+do
+  -- Cmd+S saves every modified buffer, not just the current one.
+  vim.keymap.set({ 'n', 'i', 'v' }, '<D-s>', '<cmd>wa<CR>', { desc = 'Save all files' })
+
+  -- Autosave, but conservative on purpose: this only fires `:update` (which is
+  -- a no-op unless the buffer actually has unsaved changes) when you leave
+  -- insert mode, leave a buffer, or the window loses focus -- never on a
+  -- blind timer. That matters if an external tool (an AI agent, another
+  -- editor, `git checkout`, etc.) is also writing to the same file: a
+  -- timer-based autosave could stomp those external changes moments after
+  -- they land. `autoread` handles the other direction -- when your buffer
+  -- has no local edits, nvim will pick up external changes automatically
+  -- instead of you carrying stale content forward.
+  --
+  -- This does NOT make truly simultaneous edits to the same lines safe --
+  -- nothing short of real merge tooling does that. It just means: if you
+  -- pause editing a file while something else is writing to it, nvim won't
+  -- fight it or silently overwrite it.
+  vim.o.autoread = true
+  vim.api.nvim_create_autocmd({ 'FocusLost', 'BufLeave', 'InsertLeave' }, {
+    desc = 'Autosave modified buffers (no-op if nothing changed)',
+    pattern = '*',
+    command = 'silent! update',
+  })
+end
+
+-- ============================================================
+-- SECTION 17: RELOAD CONFIG
+-- ============================================================
+do
+  -- :Reload re-sources init.lua without restarting Neovim. :reload (lowercase)
+  -- is accepted too, via a command-line abbreviation -- Neovim requires
+  -- user-defined commands to start with an uppercase letter.
+  vim.api.nvim_create_user_command('Reload', function()
+    vim.cmd.source(vim.env.MYVIMRC)
+    vim.notify('Reloaded ' .. vim.env.MYVIMRC, vim.log.levels.INFO)
+  end, { desc = 'Reload init.lua' })
+  vim.cmd.cnoreabbrev('reload Reload')
 end
 
 -- The line beneath this is called `modeline`. See `:help modeline`
