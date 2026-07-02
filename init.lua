@@ -247,6 +247,16 @@ do
   -- <leader>wo close every other window, <leader>w= equalize window sizes.
   vim.keymap.set('n', '<leader>w', '<C-w>', { desc = '[W]indow commands prefix' })
 
+  -- Open a terminal in a new split. Once inside, you're in Terminal mode --
+  -- typing goes straight to the shell, not to Neovim. To get back to Normal
+  -- mode so window/buffer keymaps work again, press <Esc> TWICE (a single
+  -- <Esc> is sent to the shell like any other key, so it looks like nothing
+  -- happened). See `:help Terminal-mode`.
+  vim.keymap.set('n', '<leader>wt', function()
+    vim.cmd.split()
+    vim.cmd.terminal()
+  end, { desc = '[W]indow: open [t]erminal in split' })
+
   -- [[ Basic Autocommands ]]
   --  See `:help lua-guide-autocommands`
 
@@ -444,16 +454,26 @@ do
   -- If you want to see what colorschemes are already installed, you can use `:Telescope colorscheme`.
   -- vim.pack.add { gh 'rose-pine/neovim' }
 
-  -- Transparent background, to let Ghostty's translucent/glass background
-  -- show through instead of nvim painting over it with an opaque color.
-  -- require('rose-pine').setup {
-  --  styles = {
-  --    transparency = true,
-    --},
-  --}
-
   -- Load the colorscheme here.
-  -- vim.cmd.colorscheme 'rose-pine'
+  vim.cmd.colorscheme 'ron'
+
+  -- Transparent background, colorscheme-agnostic: clears the background on
+  -- every `:colorscheme` change (including this one, since ColorScheme has
+  -- already fired by the time this autocmd is created below -- so also run
+  -- it once immediately). This is Ghostty's translucent/glass background
+  -- showing through instead of nvim painting over it with an opaque color.
+  -- Built-in colorschemes (like `ron` above) don't ship their own
+  -- transparency option the way some plugin colorschemes (rose-pine,
+  -- tokyonight, catppuccin, ...) do, so this clears the relevant highlight
+  -- groups directly instead of relying on a per-theme setting -- it keeps
+  -- working no matter what colorscheme you switch to next.
+  local function clear_bg()
+    for _, group in ipairs { 'Normal', 'NormalNC', 'NormalFloat', 'SignColumn', 'EndOfBuffer', 'FloatBorder', 'MsgArea' } do
+      vim.api.nvim_set_hl(0, group, { bg = 'none' })
+    end
+  end
+  vim.api.nvim_create_autocmd('ColorScheme', { desc = 'Keep the background transparent on any colorscheme', callback = clear_bg })
+  clear_bg()
 
   -- Highlight todo, notes, etc in comments
   vim.pack.add { gh 'folke/todo-comments.nvim' }
@@ -1197,7 +1217,13 @@ do
   -- :Reload re-sources init.lua without restarting Neovim. :reload (lowercase)
   -- is accepted too, via a command-line abbreviation -- Neovim requires
   -- user-defined commands to start with an uppercase letter.
+  --
+  -- `:source` always reads from disk, not from the buffer's in-memory
+  -- content -- so an edit that hasn't been saved yet reloads the OLD file
+  -- with no visible change, which looks like :Reload silently did nothing.
+  -- `:update` (a no-op if there's nothing to save) closes that gap.
   vim.api.nvim_create_user_command('Reload', function()
+    vim.cmd.update()
     vim.cmd.source(vim.env.MYVIMRC)
     vim.notify('Reloaded ' .. vim.env.MYVIMRC, vim.log.levels.INFO)
   end, { desc = 'Reload init.lua' })
