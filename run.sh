@@ -1,2 +1,3 @@
 #!/usr/bin/env bash
-echo "hello world from run.sh"
+DIR="$(cd "$(dirname "$0")" && pwd)"
+open -na "Ghostty" --args -e /bin/sh -c "cd '$DIR' && exec nvim -u init.lua ."

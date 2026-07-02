@@ -28,7 +28,9 @@ search faster; `tree-sitter-cli` is required to compile treesitter parsers
 (note: Homebrew's `tree-sitter` formula only installs the library, not the
 CLI — it's a separate package).
 
-`run.sh`, `build.sh`, and `test.sh` in this repo's root are hello-world
+`run.sh` opens a new Ghostty window running Neovim with this repo's
+`init.lua` (`nvim -u init.lua .`) so you can try out config changes without
+touching `~/.config/nvim`. `build.sh` and `test.sh` are still hello-world
 scripts for testing the `<D-r>`/`<D-b>` Cmd-chords below.
 
 ## Plugins
