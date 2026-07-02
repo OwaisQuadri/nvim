@@ -62,6 +62,7 @@ scripts for testing the `<D-r>`/`<D-b>` Cmd-chords below.
 - `harpoon` (harpoon2 branch) — jump between a handful of pinned files
 - `undotree` — visualize and navigate undo history
 - `vim-fugitive` — full git porcelain (status/commit/push/log), complementing gitsigns' hunk-level work
+- `neo-tree.nvim` (+ `nui.nvim`) — sidebar file explorer, kickstart's optional module, enabled
 
 ## Keymaps
 
@@ -177,6 +178,8 @@ doesn't fire, that's a Ghostty `keybind` passthrough config issue, not an
 | Key | Action |
 |---|---|
 | `<C-h/j/k/l>` | Move focus between windows |
+| `<leader>w` + `s/v/h/j/k/l/c/o/=` | Window commands prefix (split, move focus, close, etc. — see `:help CTRL-W`) |
+| `\` | Toggle Neo-tree file explorer |
 | `<Esc>` | Clear search highlight |
 | `<Esc><Esc>` (terminal mode) | Exit terminal mode |
 

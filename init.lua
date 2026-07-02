@@ -444,6 +444,14 @@ do
   -- If you want to see what colorschemes are already installed, you can use `:Telescope colorscheme`.
   vim.pack.add { gh 'rose-pine/neovim' }
 
+  -- Transparent background, to let Ghostty's translucent/glass background
+  -- show through instead of nvim painting over it with an opaque color.
+  require('rose-pine').setup {
+    styles = {
+      transparency = true,
+    },
+  }
+
   -- Load the colorscheme here.
   vim.cmd.colorscheme 'rose-pine'
 
@@ -1124,6 +1132,33 @@ do
 
   vim.keymap.set('n', '<D-r>', function() run_script_near_file 'run.sh' end, { desc = 'Run run.sh next to the current file' })
   vim.keymap.set('n', '<D-b>', function() run_script_near_file 'build.sh' end, { desc = 'Run build.sh next to the current file' })
+end
+
+-- ============================================================
+-- SECTION 15: FILE EXPLORER (kickstart's optional neo-tree module, enabled)
+-- ============================================================
+do
+  -- Neo-tree is a sidebar file-tree explorer. This is kickstart's own optional
+  -- `kickstart.plugins.neo-tree` module (see the commented-out require in
+  -- SECTION 10), inlined here since this config is a single file rather than
+  -- kickstart's full multi-file repo layout.
+  vim.pack.add {
+    { src = gh 'nvim-neo-tree/neo-tree.nvim', version = vim.version.range '*' },
+    gh 'nvim-lua/plenary.nvim',
+    gh 'MunifTanjim/nui.nvim',
+  }
+
+  vim.keymap.set('n', '\\', '<Cmd>Neotree reveal<CR>', { desc = 'NeoTree reveal', silent = true })
+
+  require('neo-tree').setup {
+    filesystem = {
+      window = {
+        mappings = {
+          ['\\'] = 'close_window',
+        },
+      },
+    },
+  }
 end
 
 -- The line beneath this is called `modeline`. See `:help modeline`
