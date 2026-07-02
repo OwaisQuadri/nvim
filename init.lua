@@ -108,9 +108,8 @@ do
 
   -- Make line numbers default
   vim.o.number = true
-  -- You can also add relative line numbers, to help with jumping.
-  --  Experiment for yourself to see if you like it!
-  -- vim.o.relativenumber = true
+  -- Also show relative line numbers, to help with jumping.
+  vim.o.relativenumber = true
 
   -- Enable mouse mode, can be useful for resizing splits for example!
   vim.o.mouse = 'a'
@@ -511,6 +510,23 @@ do
   -- - sd'   - [S]urround [D]elete [']quotes
   -- - sr)'  - [S]urround [R]eplace [)] [']
   require('mini.surround').setup()
+
+  -- Auto-close brackets and quotes as you type them.
+  require('mini.pairs').setup()
+
+  -- Wrap a visual selection by typing a bracket/quote directly (like most
+  -- GUI editors), e.g. select a word and press `(` to get `(word)`.
+  for _, pair in ipairs { { '(', ')' }, { '[', ']' }, { '{', '}' }, { '"', '"' }, { "'", "'" }, { '`', '`' } } do
+    local left, right = pair[1], pair[2]
+    for _, key in ipairs(left == right and { left } or { left, right }) do
+      vim.keymap.set(
+        'x',
+        key,
+        string.format('<Esc>`>a%s<Esc>`<i%s<Esc>', right, left),
+        { desc = 'Surround selection with ' .. left .. right }
+      )
+    end
+  end
 
   -- Simple and easy statusline.
   --  You could remove this setup call if you don't like it,
@@ -946,7 +962,13 @@ do
       -- <c-k>: Toggle signature help
       --
       -- See `:help blink-cmp-config-keymap` for defining your own keymap
-      preset = 'default',
+      preset = 'enter',
+
+      -- <CR>: accept the selected suggestion, or fall through to a normal
+      --   newline when the menu isn't showing one.
+      -- <Esc>: dismiss the suggestion menu (falls through to normal <Esc>
+      --   behavior, e.g. leaving insert mode, when the menu is already hidden).
+      ['<Esc>'] = { 'hide', 'fallback' },
 
       -- For more advanced Luasnip keymaps (e.g. selecting choice nodes, expansion) see:
       --    https://github.com/L3MON4D3/LuaSnip?tab=readme-ov-file#keymaps
