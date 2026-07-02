@@ -180,8 +180,21 @@ doesn't fire, that's a Ghostty `keybind` passthrough config issue, not an
 | `<C-h/j/k/l>` | Move focus between windows |
 | `<leader>w` + `s/v/h/j/k/l/c/o/=` | Window commands prefix (split, move focus, close, etc. — see `:help CTRL-W`) |
 | `\` | Toggle Neo-tree file explorer |
+| `<leader>wt` | Open a terminal in a new split |
 | `<Esc>` | Clear search highlight |
-| `<Esc><Esc>` (terminal mode) | Exit terminal mode |
+| `<Esc><Esc>` (terminal mode) | Exit terminal mode — a single `<Esc>` just gets sent to the shell |
+
+### Neo-tree file operations (focus the sidebar with `\`, then)
+
+| Key | Action |
+|---|---|
+| `a` / `A` | Add file / add directory |
+| `d` | Delete |
+| `r` | Rename |
+| `y` / `x` / `p` | Copy / cut / paste |
+| `c` / `m` | Copy to / move to (typed destination path) |
+| `T` / `u` / `U` | Trash / undo trash / restore from trash |
+| `?` | Show every Neo-tree keymap (in-app help) |
 
 ## Navigation refresher
 

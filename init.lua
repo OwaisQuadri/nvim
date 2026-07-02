@@ -455,7 +455,7 @@ do
   -- vim.pack.add { gh 'rose-pine/neovim' }
 
   -- Load the colorscheme here.
-  vim.cmd.colorscheme 'ron'
+  vim.cmd.colorscheme 'catppuccin'
 
   -- Transparent background, colorscheme-agnostic: clears the background on
   -- every `:colorscheme` change (including this one, since ColorScheme has
