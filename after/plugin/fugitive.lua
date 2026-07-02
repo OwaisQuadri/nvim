@@ -1,7 +1,0 @@
-vim.keymap.set("n", "<leader>gh", "<Esc>:G ")
-vim.keymap.set("n", "<leader>ga", "<Esc>:G add .\n")
-vim.keymap.set("n", "<leader>gu", "<Esc>:G restore --staged .\n")
-vim.keymap.set("n", "<leader>gc", "<Esc>:G commit -m \"\"<Left>")
-vim.keymap.set("n", "<leader>gp", "<Esc>:G push\n")
-vim.keymap.set("n", "<leader>gs", "<Esc>:G status\n")
-vim.keymap.set("n", "<leader>gl", "<Esc>:G log\n")
