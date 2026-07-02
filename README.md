@@ -21,9 +21,15 @@ For Swift support, `sourcekit-lsp` must be on your `PATH` — it ships with the
 Xcode command line tools (`xcode-select --install` if you don't have them).
 Everything else (LSP servers, formatters) installs itself via Mason.
 
-Also install `ripgrep` and `fd` (`brew install ripgrep fd`) — Telescope's live
-grep (`<leader>sg`, `<D-S-f>`) hard-requires `ripgrep` and won't work without
-it; `fd` just makes file search faster.
+Also install `ripgrep`, `fd`, and `tree-sitter-cli` (`brew install ripgrep fd
+tree-sitter-cli`) — Telescope's live grep (`<leader>sg`, `<D-S-f>`)
+hard-requires `ripgrep` and won't work without it; `fd` just makes file
+search faster; `tree-sitter-cli` is required to compile treesitter parsers
+(note: Homebrew's `tree-sitter` formula only installs the library, not the
+CLI — it's a separate package).
+
+`run.sh`, `build.sh`, and `test.sh` in this repo's root are hello-world
+scripts for testing the `<D-r>`/`<D-b>` Cmd-chords below.
 
 ## Plugins
 
@@ -164,6 +170,7 @@ doesn't fire, that's a Ghostty `keybind` passthrough config issue, not an
 | `<D-S-f>` | Project-wide search (live grep) |
 | `<D-S-o>` / `<D-p>` | Find files |
 | `<D-r>` | Run `run.sh` next to the current file, in a horizontal split terminal |
+| `<D-b>` | Run `build.sh` next to the current file, in a horizontal split terminal |
 
 ### Misc
 

@@ -240,6 +240,13 @@ do
   -- vim.keymap.set("n", "<C-S-j>", "<C-w>J", { desc = "Move window to the lower" })
   -- vim.keymap.set("n", "<C-S-k>", "<C-w>K", { desc = "Move window to the upper" })
 
+  -- Personal addition: <leader>w as a prefix for the full `<C-w>` window-command
+  -- family, from the old config. `:help CTRL-W` for the full list; the ones that
+  -- matter most: <leader>ws/<leader>wv split horizontal/vertical,
+  -- <leader>wh/j/k/l move focus in any direction, <leader>wc close this window,
+  -- <leader>wo close every other window, <leader>w= equalize window sizes.
+  vim.keymap.set('n', '<leader>w', '<C-w>', { desc = '[W]indow commands prefix' })
+
   -- [[ Basic Autocommands ]]
   --  See `:help lua-guide-autocommands`
 
@@ -1070,6 +1077,7 @@ do
 
   -- Old config used <C-z>, which fights with the OS's own suspend-to-background chord.
   vim.keymap.set('n', '<leader>u', vim.cmd.UndotreeToggle, { desc = 'Toggle [U]ndotree' })
+  vim.keymap.set('n', '<D-u>', vim.cmd.UndotreeToggle, { desc = 'Toggle [U]ndotree' })
 end
 
 -- ============================================================
@@ -1103,16 +1111,19 @@ do
   vim.keymap.set('n', '<D-S-o>', builtin.find_files, { desc = 'Find files' })
   vim.keymap.set('n', '<D-p>', builtin.find_files, { desc = 'Find files' })
 
-  vim.keymap.set('n', '<D-r>', function()
+  local function run_script_near_file(script_name)
     local dir = vim.fn.expand '%:p:h'
-    if vim.fn.filereadable(dir .. '/run.sh') == 0 then
-      vim.notify('No run.sh in ' .. dir, vim.log.levels.WARN)
+    if vim.fn.filereadable(dir .. '/' .. script_name) == 0 then
+      vim.notify('No ' .. script_name .. ' in ' .. dir, vim.log.levels.WARN)
       return
     end
     vim.cmd.split()
     vim.cmd.lcd(dir)
-    vim.cmd.terminal './run.sh'
-  end, { desc = 'Run run.sh next to the current file' })
+    vim.cmd.terminal('./' .. script_name)
+  end
+
+  vim.keymap.set('n', '<D-r>', function() run_script_near_file 'run.sh' end, { desc = 'Run run.sh next to the current file' })
+  vim.keymap.set('n', '<D-b>', function() run_script_near_file 'build.sh' end, { desc = 'Run build.sh next to the current file' })
 end
 
 -- The line beneath this is called `modeline`. See `:help modeline`
