@@ -1204,6 +1204,18 @@ do
 end
 
 -- ============================================================
+-- SECTION 15.5: SMEAR CURSOR -- SMOOTH ANIMATED CURSOR ON MOTIONS
+-- ============================================================
+do
+  vim.pack.add { { src = gh 'sphamba/smear-cursor.nvim' } }
+  require('smear_cursor').setup {
+    stiffness = 0.8,
+    trailing_stiffness = 0.5,
+    distance_stop_animating = 0.5,
+    hide_target_hack = false,
+  }
+end
+
 -- SECTION 16: SAVING -- SAVE-ALL SHORTCUT AND CONSERVATIVE AUTOSAVE
 -- ============================================================
 do
