@@ -622,7 +622,13 @@ do
   -- vim.pack.add { gh 'rose-pine/neovim' }
 
   -- Load the colorscheme here.
-  vim.cmd.colorscheme 'catppuccin'
+  -- 'hackerman' is our own theme, defined in colors/hackerman.lua next to this
+  -- file. `colors/` is only searched on the runtimepath, and launching via
+  -- `nvim -u init.lua` (run.sh) doesn't put this directory there the way a
+  -- real ~/.config/nvim install does -- so add it explicitly.
+  local config_dir = vim.fn.fnamemodify(debug.getinfo(1, 'S').source:sub(2), ':p:h')
+  if not vim.tbl_contains(vim.opt.rtp:get(), config_dir) then vim.opt.rtp:prepend(config_dir) end
+  vim.cmd.colorscheme 'hackerman'
 
   -- Transparent background, colorscheme-agnostic: clears the background on
   -- every `:colorscheme` change (including this one, since ColorScheme has
@@ -681,6 +687,26 @@ do
 
   -- Auto-close brackets and quotes as you type them.
   require('mini.pairs').setup()
+
+  -- Smooth-scroll the screen on movements that jump the view (<C-d>/<C-u>,
+  -- gg/G, zz/zt/zb, search jumps, mouse wheel) instead of teleporting.
+  -- Cursor animation stays off: smear-cursor already animates the cursor.
+  local animate = require 'mini.animate'
+  animate.setup {
+    cursor = { enable = false },
+    scroll = {
+      timing = animate.gen_timing.quadratic { duration = 80, unit = 'total' },
+      -- Only animate scrolls bigger than one line, so j/k near the window
+      -- edge and mouse-wheel ticks stay instant.
+      subscroll = animate.gen_subscroll.equal {
+        predicate = function(total_scroll) return total_scroll > 1 end,
+      },
+    },
+    -- Window open/close/resize animations off: keep it to scrolling.
+    resize = { enable = false },
+    open = { enable = false },
+    close = { enable = false },
+  }
 
   -- Wrap a visual selection by typing a bracket/quote directly (like most
   -- GUI editors), e.g. select a word and press `(` to get `(word)`.
