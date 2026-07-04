@@ -622,12 +622,8 @@ do
   -- vim.pack.add { gh 'rose-pine/neovim' }
 
   -- Load the colorscheme here.
-  -- 'hackerman' is our own theme, defined in colors/hackerman.lua next to this
-  -- file. `colors/` is only searched on the runtimepath, and launching via
-  -- `nvim -u init.lua` (run.sh) doesn't put this directory there the way a
-  -- real ~/.config/nvim install does -- so add it explicitly.
-  local config_dir = vim.fn.fnamemodify(debug.getinfo(1, 'S').source:sub(2), ':p:h')
-  if not vim.tbl_contains(vim.opt.rtp:get(), config_dir) then vim.opt.rtp:prepend(config_dir) end
+  -- 'hackerman' is our own theme, published at github.com/OwaisQuadri/hackerman.nvim.
+  vim.pack.add { gh 'OwaisQuadri/hackerman.nvim' }
   vim.cmd.colorscheme 'hackerman'
 
   -- Transparent background, colorscheme-agnostic: clears the background on
