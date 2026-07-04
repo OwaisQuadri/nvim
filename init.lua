@@ -184,6 +184,16 @@ do
   --  See `:help hlsearch`
   vim.keymap.set('n', '<Esc>', '<cmd>nohlsearch<CR>')
 
+  -- Center the cursor line whenever a motion actually jumps around the buffer
+  vim.keymap.set('n', 'n', 'nzzzv', { desc = 'Next search match (centered)' })
+  vim.keymap.set('n', 'N', 'Nzzzv', { desc = 'Prev search match (centered)' })
+  vim.keymap.set('n', 'gg', 'ggzz', { desc = 'Go to top (centered)' })
+  vim.keymap.set('n', 'G', 'Gzz', { desc = 'Go to bottom (centered)' })
+  vim.keymap.set('n', '<C-d>', '<C-d>zz', { desc = 'Half-page down (centered)' })
+  vim.keymap.set('n', '<C-u>', '<C-u>zz', { desc = 'Half-page up (centered)' })
+  vim.keymap.set('n', '<C-o>', '<C-o>zz', { desc = 'Older jumplist entry (centered)' })
+  vim.keymap.set('n', '<C-i>', '<C-i>zz', { desc = 'Newer jumplist entry (centered)' })
+
   -- Diagnostic Config & Keymaps
   --  See `:help vim.diagnostic.Opts`
   vim.diagnostic.config {
@@ -199,6 +209,7 @@ do
     -- Auto open the float, so you can easily read the errors when jumping with `[d` and `]d`
     jump = {
       on_jump = function(_, bufnr)
+        vim.cmd 'normal! zz'
         vim.diagnostic.open_float {
           bufnr = bufnr,
           scope = 'cursor',
@@ -209,6 +220,82 @@ do
   }
 
   vim.keymap.set('n', '<leader>q', vim.diagnostic.setloclist, { desc = 'Open diagnostic [Q]uickfix list' })
+
+  -- Neovim's default `]d`/`[d` only jump within the current buffer. Override
+  -- them to jump across every buffer with diagnostics, quickfix-list-based
+  -- the same way the cross-file git hunk jumps (]c/[c) work below -- rebuild
+  -- the list, then re-sync its "current entry" to the cursor's actual
+  -- position before calling cnext/cprev, since rebuilding resets that
+  -- pointer to the top every time (without this, repeated presses would get
+  -- stuck re-landing on the same entry instead of advancing).
+  local function jump_diagnostic_any_file(direction)
+    vim.diagnostic.setqflist { open = false }
+    local qf = vim.fn.getqflist()
+    local cur_file = vim.api.nvim_buf_get_name(0)
+    local cur_line = vim.api.nvim_win_get_cursor(0)[1]
+    local idx = 1
+    for i, entry in ipairs(qf) do
+      local fname = entry.filename
+      if (not fname or fname == '') and entry.bufnr and entry.bufnr > 0 then
+        fname = vim.api.nvim_buf_get_name(entry.bufnr)
+      end
+      if fname == cur_file and entry.lnum <= cur_line then idx = i end
+    end
+    pcall(vim.fn.setqflist, {}, 'r', { idx = idx })
+
+    local ok = pcall(vim.cmd, direction == 'next' and 'cnext' or 'cprev')
+    if not ok then
+      vim.cmd(direction == 'next' and 'cfirst' or 'clast')
+    end
+    vim.cmd 'normal! zz'
+    vim.diagnostic.open_float { scope = 'cursor', focus = false }
+  end
+
+  vim.keymap.set('n', ']d', function() jump_diagnostic_any_file 'next' end, { desc = 'Next diagnostic (crosses files)' })
+  vim.keymap.set('n', '[d', function() jump_diagnostic_any_file 'prev' end, { desc = 'Prev diagnostic (crosses files)' })
+
+  -- Copy diagnostics (message + severity) to the clipboard
+  local function yank_diagnostics(diagnostics, format, header)
+    if vim.tbl_isempty(diagnostics) then
+      vim.notify('No diagnostics found', vim.log.levels.WARN)
+      return
+    end
+
+    local lines = { header }
+    for _, d in ipairs(diagnostics) do
+      table.insert(lines, format(d))
+    end
+
+    local text = table.concat(lines, '\n')
+    vim.fn.setreg('"', text)
+    vim.fn.setreg('+', text)
+    vim.notify(('Copied %d diagnostic(s)'):format(#diagnostics))
+  end
+
+  vim.keymap.set('n', 'yd', function()
+    local diagnostics = vim.diagnostic.get(0, { lnum = vim.fn.line '.' - 1 })
+    table.sort(diagnostics, function(a, b) return a.col < b.col end)
+    yank_diagnostics(
+      diagnostics,
+      function(d) return string.format('%s: %s', vim.diagnostic.severity[d.severity], d.message) end,
+      string.format('%s:%d', vim.fn.expand '%', vim.fn.line '.')
+    )
+  end, { desc = '[Y]ank [d]iagnostics on line' })
+
+  vim.keymap.set('n', 'yD', function()
+    local diagnostics = vim.diagnostic.get(0)
+    table.sort(diagnostics, function(a, b)
+      if a.lnum ~= b.lnum then
+        return a.lnum < b.lnum
+      end
+      return a.col < b.col
+    end)
+    yank_diagnostics(
+      diagnostics,
+      function(d) return string.format('%d: %s: %s', d.lnum + 1, vim.diagnostic.severity[d.severity], d.message) end,
+      vim.fn.expand '%'
+    )
+  end, { desc = '[Y]ank all [D]iagnostics in file' })
 
   -- Exit terminal mode in the builtin terminal with a shortcut that is a bit easier
   -- for people to discover. Otherwise, you normally need to press <C-\><C-n>, which
@@ -224,20 +311,20 @@ do
   -- vim.keymap.set('n', '<up>', '<cmd>echo "Use k to move!!"<CR>')
   -- vim.keymap.set('n', '<down>', '<cmd>echo "Use j to move!!"<CR>')
 
-  -- Keybinds to make split navigation easier.
-  --  Use CTRL+<hjkl> to switch between windows
-  --
-  --  See `:help wincmd` for a list of all window commands
-  vim.keymap.set('n', '<C-h>', '<C-w><C-h>', { desc = 'Move focus to the left window' })
-  vim.keymap.set('n', '<C-l>', '<C-w><C-l>', { desc = 'Move focus to the right window' })
-  vim.keymap.set('n', '<C-j>', '<C-w><C-j>', { desc = 'Move focus to the lower window' })
-  vim.keymap.set('n', '<C-k>', '<C-w><C-k>', { desc = 'Move focus to the upper window' })
+  -- Plain `<C-w>q` uses `:close` under the hood, which refuses to close the
+  -- very last window (E444). Route it through `:quit` instead, which just
+  -- exits Neovim gracefully in that case -- same behavior otherwise.
+  local function quit_window() vim.cmd 'quit' end
 
-  -- NOTE: Some terminals have colliding keymaps or are not able to send distinct keycodes
-  -- vim.keymap.set("n", "<C-S-h>", "<C-w>H", { desc = "Move window to the left" })
-  -- vim.keymap.set("n", "<C-S-l>", "<C-w>L", { desc = "Move window to the right" })
-  -- vim.keymap.set("n", "<C-S-j>", "<C-w>J", { desc = "Move window to the lower" })
-  -- vim.keymap.set("n", "<C-S-k>", "<C-w>K", { desc = "Move window to the upper" })
+  local function open_terminal_split()
+    vim.cmd.split()
+    vim.cmd.terminal()
+  end
+
+  local function open_terminal_vsplit()
+    vim.cmd.vsplit() -- 'splitright' is set above, so this opens on the right
+    vim.cmd.terminal()
+  end
 
   -- Personal addition: <leader>w as a prefix for the full `<C-w>` window-command
   -- family, from the old config. `:help CTRL-W` for the full list; the ones that
@@ -246,15 +333,19 @@ do
   -- <leader>wo close every other window, <leader>w= equalize window sizes.
   vim.keymap.set('n', '<leader>w', '<C-w>', { desc = '[W]indow commands prefix' })
 
+  vim.keymap.set('n', '<leader>wq', quit_window, { desc = '[W]indow [q]uit' })
+  vim.keymap.set('n', '<leader>wQ', '<cmd>quitall<CR>', { desc = '[W]indow [Q]uit all' })
+
   -- Open a terminal in a new split. Once inside, you're in Terminal mode --
   -- typing goes straight to the shell, not to Neovim. To get back to Normal
   -- mode so window/buffer keymaps work again, press <Esc> TWICE (a single
   -- <Esc> is sent to the shell like any other key, so it looks like nothing
   -- happened). See `:help Terminal-mode`.
-  vim.keymap.set('n', '<leader>wt', function()
-    vim.cmd.split()
-    vim.cmd.terminal()
-  end, { desc = '[W]indow: open [t]erminal in split' })
+  vim.keymap.set('n', '<leader>wt', open_terminal_split, { desc = '[W]indow: open [t]erminal in split' })
+
+  -- Overrides the native <C-w>T ("break out into a new tab") proxied under
+  -- <leader>w -- open a terminal in a vertical split on the right instead.
+  vim.keymap.set('n', '<leader>wT', open_terminal_vsplit, { desc = '[W]indow: open [T]erminal in right split' })
 
   -- [[ Basic Autocommands ]]
   --  See `:help lua-guide-autocommands`
@@ -372,6 +463,7 @@ do
   -- below) inline, since sourcekit-lsp/personal-extras below assume they're already on.
   vim.pack.add { gh 'lewis6991/gitsigns.nvim' }
   require('gitsigns').setup {
+    signs_staged_enable = true,
     signs = {
       add = { text = '+' }, ---@diagnostic disable-line: missing-fields
       change = { text = '~' }, ---@diagnostic disable-line: missing-fields
@@ -389,21 +481,92 @@ do
       end
 
       -- Navigation
+      -- gitsigns has no repo-wide "staged" target, so for staged hunks the
+      -- quickfix list is built ourselves from `git diff --cached` (index vs
+      -- HEAD); for unstaged, gitsigns' own 'all' target scan is used.
+      local function build_hunk_qflist(is_staged, callback)
+        if not is_staged then
+          gitsigns.setqflist('all', { open = false }, callback)
+          return
+        end
+
+        local root = vim.fn.systemlist('git rev-parse --show-toplevel')[1]
+        if vim.v.shell_error ~= 0 then
+          vim.notify('Not in a git repo', vim.log.levels.WARN)
+          return
+        end
+
+        local diff = vim.fn.systemlist { 'git', '-C', root, 'diff', '--cached', '--unified=0', '--no-color' }
+        local qflist = {}
+        local file
+        for _, line in ipairs(diff) do
+          local f = line:match '^%+%+%+ b/(.*)'
+          if f then
+            file = root .. '/' .. f
+          end
+          local newline = line:match '^@@ %-%d+,?%d* %+(%d+)'
+          if newline and file then
+            table.insert(qflist, { filename = file, lnum = tonumber(newline), text = 'Staged change' })
+          end
+        end
+
+        if vim.tbl_isempty(qflist) then
+          vim.notify('No staged hunks', vim.log.levels.WARN)
+          return
+        end
+
+        vim.fn.setqflist(qflist, 'r')
+        callback()
+      end
+
+      local function jump_hunk(direction, is_staged)
+        build_hunk_qflist(is_staged, function()
+          vim.schedule(function()
+            -- Rebuilding the qflist resets its "current entry" pointer back
+            -- to the top every time, so without re-syncing it to wherever
+            -- the cursor actually is first, every press after the first
+            -- would land back on the same (second) entry instead of
+            -- advancing further.
+            local qf = vim.fn.getqflist()
+            local cur_file = vim.api.nvim_buf_get_name(0)
+            local cur_line = vim.api.nvim_win_get_cursor(0)[1]
+            local idx = 1
+            for i, entry in ipairs(qf) do
+              local fname = entry.filename
+              if (not fname or fname == '') and entry.bufnr and entry.bufnr > 0 then
+                fname = vim.api.nvim_buf_get_name(entry.bufnr)
+              end
+              if fname == cur_file and entry.lnum <= cur_line then idx = i end
+            end
+            pcall(vim.fn.setqflist, {}, 'r', { idx = idx })
+
+            local ok = pcall(vim.cmd, direction == 'next' and 'cnext' or 'cprev')
+            if not ok then
+              vim.cmd(direction == 'next' and 'cfirst' or 'clast')
+            end
+            vim.cmd 'normal! zz'
+          end)
+        end)
+      end
+
       map('n', ']c', function()
         if vim.wo.diff then
           vim.cmd.normal { ']c', bang = true }
         else
-          gitsigns.nav_hunk 'next'
+          jump_hunk('next', false)
         end
-      end, { desc = 'Jump to next git [c]hange' })
+      end, { desc = 'Jump to next git [c]hange (crosses files)' })
 
       map('n', '[c', function()
         if vim.wo.diff then
           vim.cmd.normal { '[c', bang = true }
         else
-          gitsigns.nav_hunk 'prev'
+          jump_hunk('prev', false)
         end
-      end, { desc = 'Jump to previous git [c]hange' })
+      end, { desc = 'Jump to prev git [c]hange (crosses files)' })
+
+      map('n', ']C', function() jump_hunk('next', true) end, { desc = 'Jump to next staged git [C]hange (crosses files)' })
+      map('n', '[C', function() jump_hunk('prev', true) end, { desc = 'Jump to prev staged git [C]hange (crosses files)' })
 
       -- Actions
       -- visual mode
@@ -442,6 +605,11 @@ do
       { '<leader>t', group = '[T]oggle' },
       { '<leader>h', group = 'Git [H]unk', mode = { 'n', 'v' } }, -- Enable gitsigns recommended keymaps first
       { 'gr', group = 'LSP Actions', mode = { 'n' } },
+      -- <leader>w forwards raw to <C-w>, but which-key doesn't know that by
+      -- itself -- proxy it so the full native <C-w> preset list (h/j/k/l,
+      -- s/v splits, etc.) shows up under <leader>w too, not just the keys
+      -- (q/Q/t) that have their own explicit <leader>w<key> mapping.
+      { '<leader>w', proxy = '<C-w>', group = '[W]indow' },
     },
   }
 
@@ -541,6 +709,13 @@ do
   ---@diagnostic disable-next-line: duplicate-set-field
   statusline.section_location = function() return '%2l:%-2v' end
 
+  -- mini.statusline links the filename section to 'StatusLineNC' by default,
+  -- which makes it look dim/inactive even in the focused window. Make it
+  -- bold and colored instead, and keep it that way across colorscheme changes.
+  local function make_filename_prominent() vim.api.nvim_set_hl(0, 'MiniStatuslineFilename', { link = 'Title', default = false }) end
+  vim.api.nvim_create_autocmd('ColorScheme', { desc = 'Keep the statusline filename prominent', callback = make_filename_prominent })
+  make_filename_prominent()
+
   -- ... and there is more!
   --  Check out: https://github.com/nvim-mini/mini.nvim
 end
@@ -618,6 +793,149 @@ do
   vim.keymap.set('n', '<leader>s.', builtin.oldfiles, { desc = '[S]earch Recent Files ("." for repeat)' })
   vim.keymap.set('n', '<leader>sc', builtin.commands, { desc = '[S]earch [C]ommands' })
   vim.keymap.set('n', '<leader><leader>', builtin.buffers, { desc = '[ ] Find existing buffers' })
+
+  -- [[ Recent project roots ]]
+  -- Remember every directory nvim was launched from (most-recent-first,
+  -- deduped) and offer to switch into one when starting with no file args.
+  local roots_file = vim.fn.stdpath 'data' .. '/recent_roots.txt'
+  vim.fn.mkdir(vim.fn.stdpath 'data', 'p')
+
+  -- fnamemodify(..., ':p') appends a trailing slash for directories, so
+  -- always strip it before storing/comparing or the same directory ends up
+  -- recorded as two different strings (e.g. ".../seville" and ".../seville/").
+  local function normalize_dir(dir) return (vim.fn.fnamemodify(dir, ':p'):gsub('/$', '')) end
+
+  local function read_roots()
+    local ok, lines = pcall(vim.fn.readfile, roots_file)
+    if not ok then return {} end
+
+    local seen, result = {}, {}
+    for _, line in ipairs(lines) do
+      local dir = normalize_dir(line)
+      if not seen[dir] then
+        seen[dir] = true
+        table.insert(result, dir)
+      end
+    end
+    return result
+  end
+
+  local function record_root(dir)
+    dir = normalize_dir(dir)
+    local list = read_roots()
+    for i = #list, 1, -1 do
+      if list[i] == dir then table.remove(list, i) end
+    end
+    table.insert(list, 1, dir)
+    while #list > 20 do
+      table.remove(list)
+    end
+    pcall(vim.fn.writefile, list, roots_file)
+  end
+
+  local function is_blank_buffer()
+    return vim.api.nvim_buf_get_name(0) == ''
+      and not vim.bo.modified
+      and vim.api.nvim_buf_line_count(0) == 1
+      and vim.api.nvim_buf_get_lines(0, 0, 1, false)[1] == ''
+  end
+
+  local function find_last_opened_in_dir(dir)
+    local prefix = dir .. '/'
+    for _, f in ipairs(vim.v.oldfiles) do
+      if vim.startswith(f, prefix) and vim.uv.fs_stat(f) then return f end
+    end
+  end
+
+  local function find_readme(dir)
+    for _, entry in ipairs(vim.fn.readdir(dir)) do
+      if entry:lower():match '^readme' then return dir .. '/' .. entry end
+    end
+  end
+
+  local function find_first_nonempty_file(dir)
+    local entries = vim.fn.readdir(dir)
+    table.sort(entries)
+    for _, entry in ipairs(entries) do
+      if not vim.startswith(entry, '.') then
+        local path = dir .. '/' .. entry
+        local stat = vim.uv.fs_stat(path)
+        if stat and stat.type == 'file' and stat.size > 0 then return path end
+      end
+    end
+  end
+
+  -- Instead of a blank buffer, land on: the last file opened under this
+  -- directory, else its README, else the first non-empty top-level file,
+  -- else fall back to a netrw sidebar if the directory has nothing to show.
+  local function open_landing_buffer(dir)
+    dir = normalize_dir(dir)
+    local ok, target = pcall(function() return find_last_opened_in_dir(dir) or find_readme(dir) or find_first_nonempty_file(dir) end)
+    if ok and target then
+      vim.cmd.edit(vim.fn.fnameescape(target))
+    else
+      vim.cmd('Lexplore ' .. vim.fn.fnameescape(dir))
+    end
+  end
+
+  -- A dedicated Telescope picker (rather than vim.ui.select) so it can open
+  -- in Normal mode without changing that behavior for every other ui-select
+  -- consumer (LSP code actions, etc.) globally.
+  local function pick_root()
+    local cwd = normalize_dir(vim.fn.getcwd())
+    local roots = { cwd }
+    for _, dir in ipairs(read_roots()) do
+      if dir ~= cwd and vim.uv.fs_stat(dir) ~= nil then table.insert(roots, dir) end
+    end
+
+    local pickers = require 'telescope.pickers'
+    local finders = require 'telescope.finders'
+    local conf = require('telescope.config').values
+    local actions = require 'telescope.actions'
+    local action_state = require 'telescope.actions.state'
+
+    local function on_select(choice)
+      if choice and choice ~= normalize_dir(vim.fn.getcwd()) then vim.cmd.cd(choice) end
+      -- Only replace the buffer if it's still the blank scratch buffer nvim
+      -- started with -- don't clobber real work when switching roots mid-session.
+      if is_blank_buffer() then open_landing_buffer(vim.fn.getcwd()) end
+    end
+
+    pickers
+      .new(require('telescope.themes').get_dropdown { initial_mode = 'normal' }, {
+        prompt_title = 'Open root',
+        finder = finders.new_table { results = roots },
+        sorter = conf.generic_sorter {},
+        attach_mappings = function(prompt_bufnr)
+          actions.select_default:replace(function()
+            local selection = action_state.get_selected_entry()
+            actions.close(prompt_bufnr)
+            on_select(selection and selection.value)
+          end)
+          return true
+        end,
+      })
+      :find()
+  end
+
+  vim.keymap.set('n', '<leader>sp', pick_root, { desc = '[S]earch [P]roject roots' })
+
+  vim.api.nvim_create_autocmd('VimEnter', {
+    desc = 'Track recent project roots and offer to switch on a bare launch',
+    callback = function()
+      -- `nvim <some-dir>` -- go straight to that directory's landing buffer,
+      -- no need to ask which root since one was given explicitly.
+      if vim.fn.argc() == 1 and vim.fn.isdirectory(vim.fn.argv(0)) == 1 then
+        local dir = vim.fn.fnamemodify(vim.fn.argv(0), ':p')
+        record_root(dir)
+        open_landing_buffer(dir)
+        return
+      end
+
+      record_root(vim.fn.getcwd())
+      if vim.fn.argc() == 0 then vim.schedule(pick_root) end
+    end,
+  })
 
   -- Add Telescope-based LSP pickers when an LSP attaches to a buffer.
   -- If you later switch picker plugins, this is where to update these mappings.
@@ -1157,9 +1475,30 @@ do
   -- Ghostty `keybind` passthrough config issue, not a bug in this file.
   local builtin = require 'telescope.builtin'
 
-  vim.keymap.set('n', '<D-S-f>', builtin.live_grep, { desc = 'Project-wide search (live grep)' })
-  vim.keymap.set('n', '<D-S-o>', builtin.find_files, { desc = 'Find files' })
+  -- Show everything under root, gitignored or not -- these two shouldn't
+  -- care whether the directory is even a git repo.
+  vim.keymap.set(
+    'n',
+    '<D-S-f>',
+    function() builtin.live_grep { additional_args = { '--hidden', '--no-ignore' } } end,
+    { desc = 'Project-wide search (live grep)' }
+  )
+  vim.keymap.set(
+    'n',
+    '<D-S-o>',
+    function() builtin.find_files { hidden = true, no_ignore = true } end,
+    { desc = 'Find files' }
+  )
   vim.keymap.set('n', '<D-p>', builtin.find_files, { desc = 'Find files' })
+
+  -- Xcode-style file/location history: Cmd+[ / Cmd+] walks the jumplist
+  -- backward/forward, same as <C-o>/<C-i> (already zz-centered). Cmd+Left/
+  -- Right was the first choice, but Ghostty's defaults hard-consume those
+  -- (translated to literal Ctrl-A/Ctrl-E, never reaching nvim); Cmd+[/]
+  -- collided too (default: goto_split previous/next) until unbound in
+  -- ~/.config/ghostty/config.
+  vim.keymap.set('n', '<D-[>', '<C-o>zz', { desc = 'Back in jump history' })
+  vim.keymap.set('n', '<D-]>', '<C-i>zz', { desc = 'Forward in jump history' })
 
   local function run_script_near_file(script_name)
     local dir = vim.fn.expand '%:p:h'
