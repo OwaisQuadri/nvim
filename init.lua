@@ -1874,19 +1874,33 @@ do
   local builtin = require 'telescope.builtin'
 
   -- Show everything under root, gitignored or not -- these two shouldn't
-  -- care whether the directory is even a git repo.
-  vim.keymap.set(
-    'n',
-    '<D-S-f>',
-    function() builtin.live_grep { additional_args = { '--hidden', '--no-ignore' } } end,
-    { desc = 'Project-wide search (live grep)' }
-  )
-  vim.keymap.set(
-    'n',
-    '<D-S-o>',
-    function() builtin.find_files { hidden = true, no_ignore = true } end,
-    { desc = 'Find files' }
-  )
+  -- care whether the directory is even a git repo. Junk dirs are still
+  -- excluded via explicit globs -- without them, --no-ignore walks
+  -- node_modules/.git/build artifacts on every keystroke, and rg/fd jobs
+  -- pile up faster than they can finish as you keep typing.
+  local junk_globs = {
+    '!.git/*',
+    '!node_modules/*',
+    '!dist/*',
+    '!build/*',
+    '!target/*',
+    '!.venv/*',
+    '!vendor/*',
+    '!Pods/*',
+    '!DerivedData/*',
+    '!.next/*',
+  }
+  local rg_glob_args = { '--hidden', '--no-ignore' }
+  for _, g in ipairs(junk_globs) do
+    table.insert(rg_glob_args, '--glob')
+    table.insert(rg_glob_args, g)
+  end
+
+  vim.keymap.set('n', '<D-S-f>', function() builtin.live_grep { additional_args = rg_glob_args } end, { desc = 'Project-wide search (live grep)' })
+
+  local find_files_command = { 'rg', '--files' }
+  vim.list_extend(find_files_command, rg_glob_args)
+  vim.keymap.set('n', '<D-S-o>', function() builtin.find_files { find_command = find_files_command } end, { desc = 'Find files' })
   vim.keymap.set('n', '<D-p>', builtin.find_files, { desc = 'Find files' })
 
   -- Xcode-style file/location history: Cmd+[ / Cmd+] walks the jumplist
