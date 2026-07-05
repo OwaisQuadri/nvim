@@ -626,6 +626,22 @@ do
   vim.pack.add { gh 'OwaisQuadri/hackerman.nvim' }
   vim.cmd.colorscheme 'hackerman'
 
+  -- Pull new commits from the theme's repo at most once a day, so pushing a
+  -- change there doesn't require remembering to run `vim.pack.update()` by
+  -- hand. Deferred so a slow/offline git fetch never blocks startup, and it
+  -- only takes effect on the *next* restart (this session already loaded the
+  -- colorscheme by the time the update lands).
+  do
+    vim.fn.mkdir(vim.fn.stdpath 'data', 'p')
+    local stamp_file = vim.fn.stdpath 'data' .. '/hackerman-last-update'
+    local ok, lines = pcall(vim.fn.readfile, stamp_file)
+    local last_update = ok and tonumber(lines[1])
+    if not last_update or (os.time() - last_update) > 86400 then
+      pcall(vim.fn.writefile, { tostring(os.time()) }, stamp_file)
+      vim.defer_fn(function() pcall(vim.pack.update, { 'hackerman.nvim' }, { force = true }) end, 500)
+    end
+  end
+
   -- Transparent background, colorscheme-agnostic: clears the background on
   -- every `:colorscheme` change (including this one, since ColorScheme has
   -- already fired by the time this autocmd is created below -- so also run
@@ -959,6 +975,329 @@ do
     end,
   })
 
+  -- [[ Goto-definition "real source" fallback (Swift + TS/JS only) ]]
+  --
+  -- sourcekit-lsp resolves system/stdlib `gd` into a generated `.swiftinterface`
+  -- (declarations only, no body). ts_ls resolves node_modules packages that
+  -- shipped without declaration maps into a `.d.ts` (types only, no body). Both
+  -- are valid definition locations but not the real implementation the user
+  -- wants to read.
+  --
+  -- This wraps the definition lookup: when the LSP resolves to one of those
+  -- stubs, we try to fetch the real source file from the owning GitHub repo,
+  -- cache it on disk, and open the cached copy. For anything that is NOT a stub
+  -- we fall straight through to today's behavior (`builtin.lsp_definitions`,
+  -- the telescope picker), unchanged. Every failure path also falls through --
+  -- the user is never left with nothing.
+  --
+  -- Design notes (see also memory/decisions.md rationale in the PR):
+  --   * We fetch from raw.githubusercontent.com, not the REST API: raw content
+  --     is auth-free and effectively unthrottled, whereas the REST/search API is
+  --     rate-limited to 60 req/hr unauthenticated. For *locating* a file we use
+  --     the git Trees API once (also unauthenticated) and cache the result.
+  --   * `curl` is used via `vim.system` async (callback + vim.schedule), never
+  --     `:wait()`, because this runs on the `gd` keypress and must not block.
+  local gotodef = {}
+  do
+    local cache_dir = vim.fn.stdpath 'data' .. '/gd-real-source'
+    vim.fn.mkdir(cache_dir, 'p')
+
+    -- Swift module -> GitHub "owner/repo". Only the modules whose `gd` lands in a
+    -- .swiftinterface in practice; anything not here simply falls through.
+    local swift_module_repos = {
+      Swift = 'swiftlang/swift',
+      _Concurrency = 'swiftlang/swift',
+      Foundation = 'swiftlang/swift-corelibs-foundation',
+      Dispatch = 'swiftlang/swift-corelibs-libdispatch',
+    }
+
+    -- Is this resolved definition URI a stub we can do better than?
+    local function stub_kind(path)
+      if path:match '%.swiftinterface$' then return 'swift' end
+      -- Only .d.ts files that live under a node_modules package are TS stubs.
+      if path:match '%.d%.ts$' and path:match '/node_modules/' then return 'ts' end
+      return nil
+    end
+
+    local function has_curl() return vim.fn.executable 'curl' == 1 end
+
+    -- Async GET a URL to `dest`. Calls cb(true) on HTTP 200 + non-empty file,
+    -- cb(false) otherwise. Never blocks (no :wait()).
+    local function fetch(url, dest, cb)
+      if not has_curl() then return cb(false) end
+      -- -f: fail (non-zero exit) on HTTP >= 400; -s silent; -L follow redirects.
+      vim.system({ 'curl', '-fsSL', '-o', dest, url }, { text = true }, function(result)
+        vim.schedule(function()
+          local ok = result.code == 0 and (vim.uv.fs_stat(dest) or { size = 0 }).size > 0
+          if not ok then pcall(vim.uv.fs_unlink, dest) end
+          cb(ok)
+        end)
+      end)
+    end
+
+    -- Fetch a text URL and hand its body to cb(body|nil). Uses a temp file so we
+    -- reuse the same curl path.
+    local function fetch_body(url, cb)
+      local tmp = vim.fn.tempname()
+      fetch(url, tmp, function(ok)
+        if not ok then return cb(nil) end
+        local rok, lines = pcall(vim.fn.readfile, tmp)
+        pcall(vim.uv.fs_unlink, tmp)
+        cb(rok and table.concat(lines, '\n') or nil)
+      end)
+    end
+
+    -- Deterministic on-disk cache path for a (repo, ref, path) triple, keyed by
+    -- hash so it is filesystem-safe and collision-resistant, with the real
+    -- basename preserved so the buffer keeps a sensible name + filetype.
+    local function cache_path(repo, ref, path)
+      local key = repo .. '@' .. ref .. ':' .. path
+      local hash = vim.fn.sha256(key):sub(1, 16)
+      return cache_dir .. '/' .. hash .. '-' .. vim.fn.fnamemodify(path, ':t')
+    end
+
+    -- Open a fetched file read-only (it is upstream source we should not edit).
+    -- `origin` is the window/cursor context captured when the request started; if
+    -- the user has since moved to a different window we open in a split instead of
+    -- stomping whatever they switched to. `word` (optional) is searched for so the
+    -- cursor lands near the symbol rather than at line 1.
+    local function open_file(file, origin, word)
+      -- If the user is no longer in the window they invoked `gd` from, don't
+      -- hijack their current window -- open the source in a new split.
+      if origin and vim.api.nvim_get_current_win() ~= origin.win then
+        vim.cmd('split ' .. vim.fn.fnameescape(file))
+      else
+        vim.cmd.edit(vim.fn.fnameescape(file))
+      end
+      vim.bo.readonly = true
+      vim.bo.modifiable = false
+      -- Best-effort: place the cursor on the first line mentioning the symbol.
+      if word and word ~= '' then
+        local lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
+        local pat = '%f[%w_]' .. vim.pesc(word) .. '%f[^%w_]'
+        for i, l in ipairs(lines) do
+          if l:find(pat) then
+            pcall(vim.api.nvim_win_set_cursor, 0, { i, 0 })
+            vim.cmd 'normal! zz'
+            break
+          end
+        end
+      end
+    end
+
+    -- Fetch repo/ref/path to cache (if not already cached) and open it.
+    -- `origin` (window context) and `word` (symbol) are forwarded to open_file.
+    -- Falls through via on_miss() on any failure.
+    local function fetch_and_open(repo, ref, path, on_miss, origin, word)
+      local dest = cache_path(repo, ref, path)
+      if (vim.uv.fs_stat(dest) or { size = 0 }).size > 0 then return open_file(dest, origin, word) end
+      local url = ('https://raw.githubusercontent.com/%s/%s/%s'):format(repo, ref, path)
+      fetch(url, dest, function(ok)
+        if ok then
+          open_file(dest, origin, word)
+        else
+          on_miss()
+        end
+      end)
+    end
+
+    -- Locate a file inside a repo/ref by basename, via one Trees API call
+    -- (recursive listing). Result list is cached on disk per repo+ref. Calls
+    -- cb(path|nil).
+    local function find_in_repo(repo, ref, basename, cb)
+      local tree_cache = cache_dir .. '/tree-' .. vim.fn.sha256(repo .. '@' .. ref):sub(1, 16) .. '.txt'
+
+      local function search(lines)
+        -- Prefer an exact basename match; the API path is repo-relative.
+        for _, p in ipairs(lines) do
+          if vim.fn.fnamemodify(p, ':t') == basename then return cb(p) end
+        end
+        cb(nil)
+      end
+
+      local rok, cached = pcall(vim.fn.readfile, tree_cache)
+      if rok and #cached > 0 then return search(cached) end
+
+      local url = ('https://api.github.com/repos/%s/git/trees/%s?recursive=1'):format(repo, ref)
+      fetch_body(url, function(body)
+        if not body then return cb(nil) end
+        local dok, decoded = pcall(vim.json.decode, body)
+        if not dok or type(decoded) ~= 'table' or not decoded.tree then return cb(nil) end
+        -- GitHub silently truncates large recursive trees (swiftlang/swift hits
+        -- this) and flags it only via `truncated`. A partial listing that gets
+        -- cached would permanently omit real files, so treat truncation as a miss:
+        -- don't cache it, and fall through (search a partial list is unsafe, since
+        -- a "not found" could just be an omitted entry).
+        if decoded.truncated == true then return cb(nil) end
+        local paths = {}
+        for _, entry in ipairs(decoded.tree) do
+          if entry.type == 'blob' and entry.path then table.insert(paths, entry.path) end
+        end
+        pcall(vim.fn.writefile, paths, tree_cache)
+        search(paths)
+      end)
+    end
+
+    -- Swift: read the module name out of the .swiftinterface header, map it to a
+    -- repo, find the file whose basename matches the symbol type, open it.
+    local function resolve_swift(iface_path, on_miss, origin, sym)
+      local rok, lines = pcall(vim.fn.readfile, iface_path, '', 40)
+      if not rok then return on_miss() end
+      -- sourcekit emits a header line like:  swift-module-flags: -module-name Swift ...
+      -- and/or:  // swift-interface-format-version / import lines. Grab -module-name.
+      local module
+      for _, l in ipairs(lines) do
+        module = l:match '%-module%-name%s+([%w_]+)'
+        if module then break end
+      end
+      local repo = module and swift_module_repos[module]
+      if not repo then return on_miss() end
+
+      -- The symbol under the cursor gives us the type/file name to look for.
+      -- stdlib core files are named after their type (Array.swift, String.swift).
+      if not sym or sym == '' then return on_miss() end
+      local ref = 'main'
+      find_in_repo(repo, ref, sym .. '.swift', function(path)
+        if not path then return on_miss() end
+        fetch_and_open(repo, ref, path, on_miss, origin, sym)
+      end)
+    end
+
+    -- TS/JS: walk up from the .d.ts to the owning package.json, read repository +
+    -- version, resolve the GitHub repo, then find the .ts source by basename.
+    local function find_package_json(start_path)
+      local dir = vim.fn.fnamemodify(start_path, ':h')
+      while dir and dir ~= '/' and dir ~= '' do
+        local pkg = dir .. '/package.json'
+        if vim.uv.fs_stat(pkg) then return pkg, dir end
+        local parent = vim.fn.fnamemodify(dir, ':h')
+        if parent == dir then break end
+        dir = parent
+      end
+    end
+
+    -- Normalize the many `repository` shapes npm allows into "owner/repo".
+    local function repo_from_package(pkg)
+      local rok, lines = pcall(vim.fn.readfile, pkg)
+      if not rok then return nil, nil end
+      local dok, data = pcall(vim.json.decode, table.concat(lines, '\n'))
+      if not dok or type(data) ~= 'table' then return nil, nil end
+
+      local repo_field = data.repository
+      local url
+      if type(repo_field) == 'string' then
+        url = repo_field
+      elseif type(repo_field) == 'table' then
+        url = repo_field.url
+      end
+      if type(url) ~= 'string' then return nil, data.version end
+
+      -- Handles git+https://github.com/owner/repo.git, git@github.com:owner/repo,
+      -- github:owner/repo, and bare owner/repo shorthands.
+      local owner, name = url:match 'github%.com[:/]([%w%-_%.]+)/([%w%-_%.]+)'
+      if not owner then owner, name = url:match '^github:([%w%-_%.]+)/([%w%-_%.]+)' end
+      if not owner then owner, name = url:match '^([%w%-_%.]+)/([%w%-_%.]+)$' end
+      if not owner then return nil, data.version end
+      name = name:gsub('%.git$', '')
+      return owner .. '/' .. name, data.version
+    end
+
+    local function resolve_ts(dts_path, on_miss, origin, sym)
+      local pkg = find_package_json(dts_path)
+      if not pkg then return on_miss() end
+      local repo, version = repo_from_package(pkg)
+      if not repo then return on_miss() end
+      -- Prefer the published version as a tag (v1.2.3 or 1.2.3), fall back to HEAD.
+      if not sym or sym == '' then return on_miss() end
+
+      local function try_ref(ref, next_ref)
+        find_in_repo(repo, ref, sym .. '.ts', function(path)
+          if path then return fetch_and_open(repo, ref, path, on_miss, origin, sym) end
+          if next_ref then return next_ref() end
+          on_miss()
+        end)
+      end
+
+      if version and version ~= '' then
+        try_ref('v' .. version, function() try_ref(version, function() try_ref('main', function() try_ref('master', on_miss) end) end) end)
+      else
+        try_ref('main', function() try_ref('master', on_miss) end)
+      end
+    end
+
+    -- Entry point bound to the keymap. Runs its own definition request so it can
+    -- inspect the resolved URI *before* deciding stub-vs-normal. `fallback` is
+    -- exactly today's behavior (the telescope picker).
+    --
+    -- Request/latency contract:
+    --   * We request against ONE specific def-capable client (plus a single-shot
+    --     guard), so the response/fallback logic runs EXACTLY ONCE regardless of
+    --     how many clients are attached -- no double picker, no double fetch.
+    --   * If NO attached client supports textDocument/definition, we fall through
+    --     to `fallback()` immediately rather than silently no-op'ing.
+    --   * Common (non-stub) path: for a SINGLE resolved location we jump directly
+    --     ourselves using the result already in hand -- we do NOT call fallback()
+    --     (which would fire a 2nd definition request). Only genuinely-multiple
+    --     candidates hand off to fallback()'s picker for disambiguation. So the
+    --     99% single-result case is one LSP round-trip, same as before.
+    function gotodef.go(fallback)
+      local bufnr = vim.api.nvim_get_current_buf()
+      -- Capture the origin window + symbol synchronously, before any async work,
+      -- so a later (async) buffer/window switch can't misdirect the jump.
+      local origin = { win = vim.api.nvim_get_current_win(), buf = bufnr }
+      local sym = vim.fn.expand '<cword>'
+
+      -- Pick a single client that actually supports definition. If none do, the
+      -- old builtin would have notified the user, so fall through to the picker
+      -- rather than doing nothing.
+      local client
+      for _, c in ipairs(vim.lsp.get_clients { bufnr = bufnr }) do
+        if c:supports_method('textDocument/definition', bufnr) then
+          client = c
+          break
+        end
+      end
+      if not client then return fallback() end
+
+      local params = vim.lsp.util.make_position_params(origin.win, client.offset_encoding or 'utf-8')
+      local done = false
+      client:request('textDocument/definition', params, function(err, result)
+        if done then return end
+        done = true
+        if err or not result then return fallback() end
+
+        -- Normalize to a list of locations.
+        local list = result
+        if not (vim.islist and vim.islist(result)) then list = { result } end
+        if #list == 0 then return fallback() end
+
+        local loc = list[1]
+        if type(loc) == 'table' and loc[1] then loc = loc[1] end
+        local uri = loc and (loc.uri or loc.targetUri)
+        if type(uri) ~= 'string' then return fallback() end
+
+        local path = vim.uri_to_fname(uri)
+        local kind = stub_kind(path)
+
+        if kind and has_curl() then
+          -- Stub: try to fetch the real upstream source. Any miss -> fallback().
+          if kind == 'swift' then
+            return resolve_swift(path, fallback, origin, sym)
+          else
+            return resolve_ts(path, fallback, origin, sym)
+          end
+        end
+
+        -- Not a stub (or no curl). If there are multiple candidates, hand off to
+        -- the telescope picker for disambiguation (that 2nd request is warranted).
+        -- For a single candidate, jump directly with the result we already have --
+        -- no second LSP round-trip.
+        if #list > 1 then return fallback() end
+        vim.lsp.util.show_document(loc, client.offset_encoding or 'utf-8', { focus = true })
+      end, bufnr)
+    end
+  end
+
   -- Add Telescope-based LSP pickers when an LSP attaches to a buffer.
   -- If you later switch picker plugins, this is where to update these mappings.
   vim.api.nvim_create_autocmd('LspAttach', {
@@ -976,7 +1315,14 @@ do
       -- Jump to the definition of the word under your cursor.
       -- This is where a variable was first declared, or where a function is defined, etc.
       -- To jump back, press <C-t>.
-      vim.keymap.set('n', 'grd', builtin.lsp_definitions, { buffer = buf, desc = '[G]oto [D]efinition' })
+      --
+      -- For Swift/TS/JS system symbols the LSP resolves to a declarations-only
+      -- stub (.swiftinterface / .d.ts). `gotodef.go` intercepts only those cases
+      -- to fetch the real source; every other case (and every failure) falls
+      -- through to the telescope picker below, unchanged.
+      local function goto_definition() gotodef.go(builtin.lsp_definitions) end
+      vim.keymap.set('n', 'grd', goto_definition, { buffer = buf, desc = '[G]oto [D]efinition' })
+      vim.keymap.set('n', 'gd', goto_definition, { buffer = buf, desc = '[G]oto [D]efinition' })
 
       -- Fuzzy find all the symbols in your current document.
       -- Symbols are things like variables, functions, types, etc.
@@ -1083,6 +1429,11 @@ do
       -- WARN: This is not Goto Definition, this is Goto Declaration.
       --  For example, in C this would take you to the header.
       map('grD', vim.lsp.buf.declaration, '[G]oto [D]eclaration')
+
+      -- Xcode alt-click style: peek docs for the symbol under the cursor without
+      -- leaving your place. `K` does the same thing; this is a second binding for
+      -- muscle memory coming from Xcode.
+      map('gD', vim.lsp.buf.hover, '[H]over [D]ocs')
 
       -- The following two autocommands are used to highlight references of the
       -- word under your cursor when your cursor rests there for a little while.
