@@ -1401,6 +1401,31 @@ do
   vim.pack.add { gh 'j-hui/fidget.nvim' }
   require('fidget').setup {}
 
+  -- Hover docs, but auto-focused: skip the "press K/gD twice to jump into the
+  -- float" step, and let <Esc> dismiss the float (in addition to the default
+  -- `q`). Works by temporarily wrapping `open_floating_preview` -- the function
+  -- the hover response handler calls once the server actually replies -- so it
+  -- self-restores after firing once and never touches other floats (signature
+  -- help, etc.), which should keep stealing focus mid-insert.
+  local function hover_and_focus()
+    local orig = vim.lsp.util.open_floating_preview
+    local function wrapper(contents, syntax, opts)
+      if vim.lsp.util.open_floating_preview == wrapper then vim.lsp.util.open_floating_preview = orig end
+      local floatbuf, floatwin = orig(contents, syntax, opts)
+      vim.api.nvim_set_current_win(floatwin)
+      vim.keymap.set('n', '<Esc>', '<cmd>close<CR>', { buffer = floatbuf, nowait = true, silent = true, desc = 'Close hover' })
+      return floatbuf, floatwin
+    end
+    vim.lsp.util.open_floating_preview = wrapper
+    -- Self-heal: if hover never resolves (no docs, error, etc.), don't leave the
+    -- wrapper installed forever -- restore it after a beat unless something else
+    -- already did.
+    vim.defer_fn(function()
+      if vim.lsp.util.open_floating_preview == wrapper then vim.lsp.util.open_floating_preview = orig end
+    end, 4000)
+    vim.lsp.buf.hover()
+  end
+
   --  This function gets run when an LSP attaches to a particular buffer.
   --    That is to say, every time a new file is opened that is associated with
   --    an lsp (for example, opening `main.rs` is associated with `rust_analyzer`) this
@@ -1430,10 +1455,10 @@ do
       --  For example, in C this would take you to the header.
       map('grD', vim.lsp.buf.declaration, '[G]oto [D]eclaration')
 
-      -- Xcode alt-click style: peek docs for the symbol under the cursor without
-      -- leaving your place. `K` does the same thing; this is a second binding for
-      -- muscle memory coming from Xcode.
-      map('gD', vim.lsp.buf.hover, '[H]over [D]ocs')
+      -- Xcode alt-click style: peek docs for the symbol under the cursor. `K`
+      -- does the same lookup, but this one auto-focuses the float immediately
+      -- (no double-press needed) and <Esc> dismisses it.
+      map('gD', hover_and_focus, '[H]over [D]ocs (focused)')
 
       -- The following two autocommands are used to highlight references of the
       -- word under your cursor when your cursor rests there for a little while.
