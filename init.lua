@@ -750,9 +750,25 @@ do
   -- mini.statusline links the filename section to 'StatusLineNC' by default,
   -- which makes it look dim/inactive even in the focused window. Make it
   -- bold and colored instead, and keep it that way across colorscheme changes.
-  local function make_filename_prominent() vim.api.nvim_set_hl(0, 'MiniStatuslineFilename', { link = 'Title', default = false }) end
+  local function make_filename_prominent()
+    vim.api.nvim_set_hl(0, 'MiniStatuslineFilename', { link = 'Title', default = false })
+    vim.api.nvim_set_hl(0, 'MiniStatuslineFilenameBase', { link = 'Boolean', default = false })
+  end
   vim.api.nvim_create_autocmd('ColorScheme', { desc = 'Keep the statusline filename prominent', callback = make_filename_prominent })
   make_filename_prominent()
+
+  -- Split the filename section so the actual filename (the last path
+  -- segment) stands out from the directory it lives in.
+  ---@diagnostic disable-next-line: duplicate-set-field
+  statusline.section_filename = function(args)
+    if vim.bo.buftype == 'terminal' then return '%t' end
+
+    local path = statusline.is_truncated(args.trunc_width) and vim.fn.expand '%:~:.' or vim.fn.expand '%:p'
+    local dir, base = path:match '^(.*/)([^/]*)$'
+    dir, base = dir or '', base or path
+
+    return dir .. '%#MiniStatuslineFilenameBase#' .. base .. '%#MiniStatuslineFilename#%m%r'
+  end
 
   -- ... and there is more!
   --  Check out: https://github.com/nvim-mini/mini.nvim
