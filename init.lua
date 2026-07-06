@@ -664,6 +664,45 @@ do
   vim.pack.add { gh 'folke/todo-comments.nvim' }
   require('todo-comments').setup { signs = false }
 
+  -- Cycle todo comments project-wide (ripgrep search), quickfix-list-based
+  -- the same way ]d/[d and ]c/[c cross files above -- rebuild the list on
+  -- every press, then re-sync its "current entry" to the cursor's actual
+  -- position before calling cnext/cprev, since rebuilding resets that
+  -- pointer to the top every time.
+  local function jump_todo(direction)
+    require('todo-comments.search').search(function(results)
+      vim.schedule(function()
+        if vim.tbl_isempty(results) then
+          vim.notify('No todos found', vim.log.levels.WARN)
+          return
+        end
+        vim.fn.setqflist({}, 'r', { title = 'Todo', items = results })
+        local qf = vim.fn.getqflist()
+        local cur_file = vim.fn.fnamemodify(vim.api.nvim_buf_get_name(0), ':p')
+        local cur_line = vim.api.nvim_win_get_cursor(0)[1]
+        local idx = 1
+        for i, entry in ipairs(qf) do
+          local fname = entry.filename
+          if (not fname or fname == '') and entry.bufnr and entry.bufnr > 0 then
+            fname = vim.api.nvim_buf_get_name(entry.bufnr)
+          end
+          fname = fname and vim.fn.fnamemodify(fname, ':p') or fname
+          if fname == cur_file and entry.lnum <= cur_line then idx = i end
+        end
+        pcall(vim.fn.setqflist, {}, 'r', { idx = idx })
+
+        local ok = pcall(vim.cmd, direction == 'next' and 'cnext' or 'cprev')
+        if not ok then
+          vim.cmd(direction == 'next' and 'cfirst' or 'clast')
+        end
+        vim.cmd 'normal! zz'
+      end)
+    end, { disable_not_found_warnings = true })
+  end
+
+  vim.keymap.set('n', ']t', function() jump_todo 'next' end, { desc = 'Next [t]odo comment (crosses files)' })
+  vim.keymap.set('n', '[t', function() jump_todo 'prev' end, { desc = 'Prev [t]odo comment (crosses files)' })
+
   -- [[ mini.nvim ]]
   --  A collection of various small independent plugins/modules
   vim.pack.add { gh 'nvim-mini/mini.nvim' }
