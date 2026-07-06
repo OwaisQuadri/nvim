@@ -194,6 +194,19 @@ do
   vim.keymap.set('n', '<C-o>', '<C-o>zz', { desc = 'Older jumplist entry (centered)' })
   vim.keymap.set('n', '<C-i>', '<C-i>zz', { desc = 'Newer jumplist entry (centered)' })
 
+  -- macOS-standard word/line delete: option+backspace deletes the previous
+  -- word, cmd+backspace deletes back to the start of the line
+  vim.keymap.set('i', '<M-BS>', '<C-w>', { desc = 'Delete word before cursor' })
+  vim.keymap.set('i', '<D-BS>', '<C-u>', { desc = 'Delete to start of line' })
+
+  -- macOS-standard undo/redo everywhere
+  vim.keymap.set('n', '<D-z>', 'u', { desc = 'Undo' })
+  vim.keymap.set('n', '<D-Z>', '<C-r>', { desc = 'Redo' })
+  vim.keymap.set('i', '<D-z>', '<C-o>u', { desc = 'Undo' })
+  vim.keymap.set('i', '<D-Z>', '<C-o><C-r>', { desc = 'Redo' })
+  vim.keymap.set('v', '<D-z>', '<Esc>u', { desc = 'Undo' })
+  vim.keymap.set('v', '<D-Z>', '<Esc><C-r>', { desc = 'Redo' })
+
   -- Diagnostic Config & Keymaps
   --  See `:help vim.diagnostic.Opts`
   vim.diagnostic.config {
