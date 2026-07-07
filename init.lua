@@ -344,10 +344,17 @@ do
   -- matter most: <leader>ws/<leader>wv split horizontal/vertical,
   -- <leader>wh/j/k/l move focus in any direction, <leader>wc close this window,
   -- <leader>wo close every other window, <leader>w= equalize window sizes.
-  vim.keymap.set('n', '<leader>w', '<C-w>', { desc = '[W]indow commands prefix' })
+  -- `remap = true` so that if the `<C-w>` expansion below is left pending
+  -- (e.g. you paused between `<leader>w` and the next key, past `timeoutlen`),
+  -- the resulting <C-w> is still looked up in the mapping table -- letting it
+  -- combine with a later keypress to match mappings like `<C-w>Q` below.
+  -- Without this, a noremap'd `<C-w>` falls straight to Vim's native <C-w>
+  -- prefix (no Q action there), and it silently no-ops.
+  vim.keymap.set('n', '<leader>w', '<C-w>', { remap = true, desc = '[W]indow commands prefix' })
 
   vim.keymap.set('n', '<leader>wq', quit_window, { desc = '[W]indow [q]uit' })
   vim.keymap.set('n', '<leader>wQ', '<cmd>quitall<CR>', { desc = '[W]indow [Q]uit all' })
+  vim.keymap.set('n', '<C-w>Q', '<cmd>quitall<CR>', { desc = '[W]indow [Q]uit all' })
 
   -- Open a terminal in a new split. Once inside, you're in Terminal mode --
   -- typing goes straight to the shell, not to Neovim. To get back to Normal
