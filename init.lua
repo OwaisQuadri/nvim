@@ -2090,5 +2090,47 @@ do
   vim.cmd.cnoreabbrev('reload Reload')
 end
 
+-- ============================================================
+-- SECTION 18: PERSONAL EXTRAS -- AUTOSCROLL
+-- ============================================================
+do
+  -- <leader>` toggles a slow, hands-free one-line-at-a-time scroll of the
+  -- current window (reading mode). It pauses while that window isn't in
+  -- Normal mode (so typing in Insert mode or selecting in Visual mode never
+  -- fights the view), keeps scrolling the window it was started in even if
+  -- you focus another split, and stops itself at the end of the buffer or
+  -- when the window goes away.
+  local interval_ms = 400 -- one line every 400ms; lower = faster
+
+  local timer, scroll_win
+
+  local function stop(msg)
+    if not timer then return end
+    timer:stop()
+    timer:close()
+    timer, scroll_win = nil, nil
+    if msg then vim.notify(msg) end
+  end
+
+  local function tick()
+    if not vim.api.nvim_win_is_valid(scroll_win) then return stop() end
+    if vim.api.nvim_get_current_win() == scroll_win and vim.fn.mode() ~= 'n' then return end
+    vim.api.nvim_win_call(scroll_win, function()
+      if vim.fn.line 'w$' >= vim.fn.line '$' then return stop 'Autoscroll: reached end of buffer' end
+      vim.cmd 'normal! \5' -- \5 is <C-e>: scroll the view down one line
+    end)
+  end
+
+  local function toggle()
+    if timer then return stop 'Autoscroll off' end
+    scroll_win = vim.api.nvim_get_current_win()
+    timer = assert(vim.uv.new_timer())
+    timer:start(interval_ms, interval_ms, vim.schedule_wrap(tick))
+    vim.notify 'Autoscroll on'
+  end
+
+  vim.keymap.set('n', '<leader>`', toggle, { desc = 'Autoscroll toggle' })
+end
+
 -- The line beneath this is called `modeline`. See `:help modeline`
 -- vim: ts=2 sts=2 sw=2 et
