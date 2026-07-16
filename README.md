@@ -52,7 +52,7 @@ scripts for testing the `<D-r>`/`<D-b>` Cmd-chords below.
 - Servers: `lua_ls`, `ts_ls` (JS/TS/React Native), `sourcekit` (Swift, via Xcode's `sourcekit-lsp` — not managed by Mason)
 
 **Formatting**
-- `conform.nvim` — `stylua` for Lua, `prettier` for JS/TS/JSX/TSX/JSON
+- `conform.nvim` — `stylua` for Lua, `prettier` for JS/TS/JSX/TSX/JSON/CSS/HTML/Markdown/YAML
 
 **Completion**
 - `blink.cmp`, `LuaSnip` — autocomplete + snippets
@@ -65,6 +65,8 @@ scripts for testing the `<D-r>`/`<D-b>` Cmd-chords below.
 - `undotree` — visualize and navigate undo history
 - `vim-fugitive` — full git porcelain (status/commit/push/log), complementing gitsigns' hunk-level work
 - `neo-tree.nvim` (+ `nui.nvim`) — sidebar file explorer, kickstart's optional module, enabled
+- `render-markdown.nvim` — renders markdown (READMEs, notes) prettily in the buffer
+- `nvim-treesitter-context` — sticky headers: pins the enclosing function/class/struct (or markdown heading) to the top of the window
 
 ## Keymaps
 
@@ -112,6 +114,8 @@ Leader key is **Space**.
 | `<leader>th` | Toggle inlay hints |
 | `<leader>tb` | Toggle git blame line |
 | `<leader>tw` | Toggle git word diff |
+| `<leader>tm` | Toggle markdown render (on by default in markdown buffers) |
+| `<leader>tc` | Toggle sticky scope context (on by default) |
 
 ### Git hunks (`<leader>h*`, via gitsigns)
 
@@ -183,6 +187,9 @@ doesn't fire, that's a Ghostty `keybind` passthrough config issue, not an
 | `<leader>w` + `s/v/h/j/k/l/c/o/=` | Window commands prefix (split, move focus, close, etc. — see `:help CTRL-W`) |
 | `\` | Toggle Neo-tree file explorer |
 | `<leader>wt` | Open a terminal in a new split |
+| `` <leader>` `` | Autoscroll toggle — hands-free word-by-word reading mode |
+| `` ` `` (while autoscrolling) | Pause / unpause autoscroll |
+| `:Autoscroll speed 2.0` | Set autoscroll pace in words per second (default 10, applies mid-session) |
 | `<Esc>` | Clear search highlight |
 | `<Esc><Esc>` (terminal mode) | Exit terminal mode — a single `<Esc>` just gets sent to the shell |
 
