@@ -85,6 +85,25 @@ P.S. You can delete this when you're done too. It's your config now! :)
 --]]
 
 -- ============================================================
+-- SECTION 0: PLATFORM HELPERS
+-- This config is authored on macOS and leans on Cmd (`<D-...>`) chords, which
+-- only fire in terminals that forward them via the Kitty keyboard protocol
+-- (Ghostty). On Windows/Linux those chords never arrive, so we define the
+-- platform flags plus a small helper once at file scope -- every section below
+-- can then register a Windows-friendly Ctrl/leader equivalent right next to the
+-- Mac binding, and each side only takes effect on its own platform.
+-- ============================================================
+local is_mac = vim.uv.os_uname().sysname == 'Darwin'
+local is_win = vim.fn.has 'win32' == 1
+
+-- Map the same rhs under a Mac chord and/or a Windows chord, each only on the
+-- platform it belongs to. Pass nil for either key to skip that platform.
+local function map_platform(modes, mac_key, win_key, rhs, opts)
+  if is_mac and mac_key then vim.keymap.set(modes, mac_key, rhs, opts) end
+  if is_win and win_key then vim.keymap.set(modes, win_key, rhs, opts) end
+end
+
+-- ============================================================
 -- SECTION 1: OPTIONS
 -- Core Neovim settings, leaders, options, basic keymaps, basic autocmds
 -- ============================================================
@@ -194,18 +213,19 @@ do
   vim.keymap.set('n', '<C-o>', '<C-o>zz', { desc = 'Older jumplist entry (centered)' })
   vim.keymap.set('n', '<C-i>', '<C-i>zz', { desc = 'Newer jumplist entry (centered)' })
 
-  -- macOS-standard word/line delete: option+backspace deletes the previous
-  -- word, cmd+backspace deletes back to the start of the line
-  vim.keymap.set('i', '<M-BS>', '<C-w>', { desc = 'Delete word before cursor' })
-  vim.keymap.set('i', '<D-BS>', '<C-u>', { desc = 'Delete to start of line' })
+  -- Word/line delete. macOS: option+backspace deletes the previous word,
+  -- cmd+backspace deletes to the start of the line. Windows: ctrl+backspace
+  -- deletes the previous word, and ctrl+u (insert) deletes to line start.
+  map_platform('i', '<M-BS>', '<C-BS>', '<C-w>', { desc = 'Delete word before cursor' })
+  map_platform('i', '<D-BS>', '<C-u>', '<C-u>', { desc = 'Delete to start of line' })
 
-  -- macOS-standard undo/redo everywhere
-  vim.keymap.set('n', '<D-z>', 'u', { desc = 'Undo' })
-  vim.keymap.set('n', '<D-Z>', '<C-r>', { desc = 'Redo' })
-  vim.keymap.set('i', '<D-z>', '<C-o>u', { desc = 'Undo' })
-  vim.keymap.set('i', '<D-Z>', '<C-o><C-r>', { desc = 'Redo' })
-  vim.keymap.set('v', '<D-z>', '<Esc>u', { desc = 'Undo' })
-  vim.keymap.set('v', '<D-Z>', '<Esc><C-r>', { desc = 'Redo' })
+  -- Undo/redo everywhere. macOS: cmd+z / cmd+shift+z. Windows: ctrl+z / ctrl+y.
+  map_platform('n', '<D-z>', '<C-z>', 'u', { desc = 'Undo' })
+  map_platform('n', '<D-Z>', '<C-y>', '<C-r>', { desc = 'Redo' })
+  map_platform('i', '<D-z>', '<C-z>', '<C-o>u', { desc = 'Undo' })
+  map_platform('i', '<D-Z>', '<C-y>', '<C-o><C-r>', { desc = 'Redo' })
+  map_platform('v', '<D-z>', '<C-z>', '<Esc>u', { desc = 'Undo' })
+  map_platform('v', '<D-Z>', '<C-y>', '<Esc><C-r>', { desc = 'Redo' })
 
   -- Diagnostic Config & Keymaps
   --  See `:help vim.diagnostic.Opts`
@@ -1918,7 +1938,8 @@ do
 
   -- Old config used <C-z>, which fights with the OS's own suspend-to-background chord.
   vim.keymap.set('n', '<leader>u', vim.cmd.UndotreeToggle, { desc = 'Toggle [U]ndotree' })
-  vim.keymap.set('n', '<D-u>', vim.cmd.UndotreeToggle, { desc = 'Toggle [U]ndotree' })
+  -- <leader>u (above) works on every platform; <D-u> is the Mac Cmd chord.
+  map_platform('n', '<D-u>', nil, vim.cmd.UndotreeToggle, { desc = 'Toggle [U]ndotree' })
 end
 
 -- ============================================================
@@ -1971,12 +1992,12 @@ do
     table.insert(rg_glob_args, g)
   end
 
-  vim.keymap.set('n', '<D-S-f>', function() builtin.live_grep { additional_args = rg_glob_args } end, { desc = 'Project-wide search (live grep)' })
+  map_platform('n', '<D-S-f>', '<C-S-f>', function() builtin.live_grep { additional_args = rg_glob_args } end, { desc = 'Project-wide search (live grep)' })
 
   local find_files_command = { 'rg', '--files' }
   vim.list_extend(find_files_command, rg_glob_args)
-  vim.keymap.set('n', '<D-S-o>', function() builtin.find_files { find_command = find_files_command } end, { desc = 'Find files' })
-  vim.keymap.set('n', '<D-p>', builtin.find_files, { desc = 'Find files' })
+  map_platform('n', '<D-S-o>', '<C-S-o>', function() builtin.find_files { find_command = find_files_command } end, { desc = 'Find files' })
+  map_platform('n', '<D-p>', '<C-p>', builtin.find_files, { desc = 'Find files' })
 
   -- Xcode-style file/location history: Cmd+[ / Cmd+] walks the jumplist
   -- backward/forward, same as <C-o>/<C-i> (already zz-centered). Cmd+Left/
@@ -1989,17 +2010,26 @@ do
 
   local function run_script_near_file(script_name)
     local dir = vim.fn.expand '%:p:h'
-    if vim.fn.filereadable(dir .. '/' .. script_name) == 0 then
+    if vim.fn.filereadable(vim.fs.joinpath(dir, script_name)) == 0 then
       vim.notify('No ' .. script_name .. ' in ' .. dir, vim.log.levels.WARN)
       return
     end
     vim.cmd.split()
     vim.cmd.lcd(dir)
-    vim.cmd.terminal('./' .. script_name)
+    -- The scripts are POSIX shell (`run.sh`/`build.sh`). On Windows they can't
+    -- run directly, so invoke them through Git Bash's `bash`; on macOS just
+    -- exec them relative to the (now lcd'd) directory.
+    if is_win then
+      vim.cmd.terminal('bash ' .. vim.fn.shellescape('./' .. script_name))
+    else
+      vim.cmd.terminal('./' .. script_name)
+    end
   end
 
-  vim.keymap.set('n', '<D-r>', function() run_script_near_file 'run.sh' end, { desc = 'Run run.sh next to the current file' })
-  vim.keymap.set('n', '<D-b>', function() run_script_near_file 'build.sh' end, { desc = 'Run build.sh next to the current file' })
+  -- macOS: Cmd+r / Cmd+b. Windows: <leader>wr / <leader>wb (Ctrl+r/b collide
+  -- with redo and other chords, so use the window-prefix namespace instead).
+  map_platform('n', '<D-r>', '<leader>wr', function() run_script_near_file 'run.sh' end, { desc = 'Run run.sh next to the current file' })
+  map_platform('n', '<D-b>', '<leader>wb', function() run_script_near_file 'build.sh' end, { desc = 'Run build.sh next to the current file' })
 end
 
 -- ============================================================
@@ -2045,8 +2075,9 @@ end
 -- SECTION 16: SAVING -- SAVE-ALL SHORTCUT AND CONSERVATIVE AUTOSAVE
 -- ============================================================
 do
-  -- Cmd+S saves every modified buffer, not just the current one.
-  vim.keymap.set({ 'n', 'i', 'v' }, '<D-s>', '<cmd>wa<CR>', { desc = 'Save all files' })
+  -- Save every modified buffer, not just the current one. macOS: Cmd+S;
+  -- Windows: Ctrl+S.
+  map_platform({ 'n', 'i', 'v' }, '<D-s>', '<C-s>', '<cmd>wa<CR>', { desc = 'Save all files' })
 
   -- Autosave, but conservative on purpose: this only fires `:update` (which is
   -- a no-op unless the buffer actually has unsaved changes) when you leave

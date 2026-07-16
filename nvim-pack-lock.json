@@ -26,6 +26,10 @@
       "rev": "84a4987ff36798c2fc1169cbaff67960aed9776f",
       "src": "https://github.com/NMAC427/guess-indent.nvim"
     },
+    "hackerman.nvim": {
+      "rev": "539f68447ebe765472db6770b90ad3cc1b46e8c1",
+      "src": "https://github.com/OwaisQuadri/hackerman.nvim"
+    },
     "harpoon": {
       "rev": "87b1a3506211538f460786c23f98ec63ad9af4e5",
       "src": "https://github.com/ThePrimeagen/harpoon",

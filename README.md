@@ -212,3 +212,96 @@ A few core vim motions worth having muscle memory for:
 
 If any of this is unfamiliar, run `:Tutor` inside Neovim — it's an
 interactive walkthrough and the fastest way to build the muscle memory.
+
+## Windows setup
+
+This config is authored on macOS but runs on Windows too. The Cmd (`<D-…>`)
+chords are Mac/Ghostty-only; on Windows the same actions are bound to
+Ctrl/leader chords (see the table below). Launch Neovim from **Git Bash** so
+the shell and `PATH` match the `.sh` helper scripts.
+
+### 1. Config path (junction, not `~/.config/nvim`)
+
+Windows looks for the config at `%LOCALAPPDATA%\nvim`. Point it at this repo
+with a directory junction (no admin required):
+
+```cmd
+:: back up any existing config first
+if exist "%LOCALAPPDATA%\nvim" ren "%LOCALAPPDATA%\nvim" nvim.bak
+mklink /J "%LOCALAPPDATA%\nvim" "C:\Users\Owais\Documents\github\nvim"
+```
+
+Edits in the repo now apply immediately — the junction is the live config.
+
+### 2. Install Neovim and CLI tools (winget)
+
+```powershell
+winget install --id Neovim.Neovim -e            # must be >= 0.12 for vim.pack
+winget install --id BurntSushi.ripgrep.MSVC -e  # live grep (<leader>sg) hard-requires this
+winget install --id sharkdp.fd -e               # faster file search
+winget install --id tree-sitter.tree-sitter-cli -e
+```
+
+`sourcekit-lsp` (Swift) is **not** needed on Windows — it's Mac/Xcode only.
+Everything else (LSP servers, `stylua`, `prettier`) auto-installs via Mason on
+first use.
+
+### 3. A C compiler for treesitter parsers (the non-obvious part)
+
+The config's `nvim-treesitter` (main branch) **compiles each parser from C
+source**, so it needs a C compiler. There's no C toolchain on a stock Windows
+box, and `tree-sitter build` won't find one. The lightest fix is **zig**, whose
+`zig cc` frontend ships its own libc headers (no Visual Studio / Windows SDK
+required):
+
+```powershell
+winget install --id zig.zig -e
+```
+
+`tree-sitter build` reads the `CC` environment variable but passes its host
+triple `x86_64-pc-windows-msvc`, which `zig cc` rejects (and the msvc ABI would
+need the absent SDK anyway). So `CC` points at a tiny shim,
+[`zcc.c`](tools/zcc.c) → `zcc.exe`, that invokes `zig cc` and rewrites that
+triple to `x86_64-windows-gnu` (zig's self-contained mingw libc). Build and
+register it once:
+
+```powershell
+zig cc "C:\Users\Owais\bin\zcc.c" -o "C:\Users\Owais\bin\zcc.exe" -O2
+[Environment]::SetEnvironmentVariable("CC", "C:\Users\Owais\bin\zcc.exe", "User")
+```
+
+(A copy of the shim source lives at [`tools/zcc.c`](tools/zcc.c) in this repo.)
+With `CC` set, `:TSInstall`/auto-install compiles every parser cleanly. If you
+later install the Visual Studio C++ Build Tools, you can drop the shim and unset
+`CC` — `tree-sitter build` will use `cl.exe` natively.
+
+### 4. Nerd Font
+
+Install any Nerd Font and select it in your Git Bash / Windows Terminal
+profile so the statusline and file-explorer icons render (`vim.g.have_nerd_font`
+is on).
+
+### 5. First launch
+
+Run `nvim` from Git Bash. `vim.pack` clones every plugin (a few minutes the
+first time), then Mason and treesitter pull servers/parsers on demand. Run
+`:checkhealth` to confirm.
+
+### Windows keybinds (Ctrl/leader equivalents of the Mac Cmd-chords)
+
+| Action | macOS | Windows |
+|---|---|---|
+| Save all buffers | `<D-s>` | `<C-s>` |
+| Project-wide search (live grep) | `<D-S-f>` | `<C-S-f>` |
+| Find files | `<D-p>` / `<D-S-o>` | `<C-p>` / `<C-S-o>` |
+| Undo / redo | `<D-z>` / `<D-Z>` | `<C-z>` / `<C-y>` |
+| Delete word (insert) | `<M-BS>` | `<C-BS>` |
+| Delete to line start (insert) | `<D-BS>` | `<C-u>` |
+| Toggle Undotree | `<D-u>` | `<leader>u` |
+| Run `run.sh` beside file | `<D-r>` | `<leader>wr` |
+| Run `build.sh` beside file | `<D-b>` | `<leader>wb` |
+| Back / forward in jump history | `<D-[>` / `<D-]>` | `<C-o>` / `<C-i>` |
+
+The `run.sh`/`build.sh` runners execute the scripts through Git Bash's `bash`
+on Windows (they run directly via `./script.sh` on macOS), so no `.bat`
+equivalents are needed.
