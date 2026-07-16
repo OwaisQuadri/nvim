@@ -1723,6 +1723,10 @@ do
       typescript = { 'prettier' },
       typescriptreact = { 'prettier' },
       json = { 'prettier' },
+      css = { 'prettier' },
+      html = { 'prettier' },
+      markdown = { 'prettier' },
+      yaml = { 'prettier' },
     },
   }
 
@@ -2125,42 +2129,126 @@ end
 -- SECTION 18: PERSONAL EXTRAS -- AUTOSCROLL
 -- ============================================================
 do
-  -- <leader>` toggles a slow, hands-free one-line-at-a-time scroll of the
-  -- current window (reading mode). It pauses while that window isn't in
-  -- Normal mode (so typing in Insert mode or selecting in Visual mode never
-  -- fights the view), keeps scrolling the window it was started in even if
-  -- you focus another split, and stops itself at the end of the buffer or
-  -- when the window goes away.
-  local interval_ms = 400 -- one line every 400ms; lower = faster
+  -- <leader>` toggles a slow, hands-free word-by-word walk of the current
+  -- window (reading mode): the cursor advances one word at a time and the
+  -- view follows it. While it's running, plain ` pauses/unpauses -- that
+  -- mapping only exists for the duration of the session, so ` stays the
+  -- normal go-to-mark prefix otherwise. It also pauses while the window
+  -- isn't in Normal mode (so typing in Insert mode or selecting in Visual
+  -- mode never fights the cursor), keeps walking the window it was started
+  -- in even if you focus another split, and stops itself at the end of the
+  -- buffer or when the window goes away.
+  --
+  -- Pace is words per second, adjustable live (even mid-session) with
+  --   :Autoscroll speed 2.0
+  -- (`:set` can't host custom options -- Vim only allows its own built-in
+  -- option names there -- so a user command is the closest native shape.)
+  local words_per_second = 10
 
-  local timer, scroll_win
+  local function interval_ms() return math.floor(1000 / words_per_second) end
+
+  local timer, scroll_win, paused
 
   local function stop(msg)
     if not timer then return end
     timer:stop()
     timer:close()
-    timer, scroll_win = nil, nil
+    timer, scroll_win, paused = nil, nil, nil
+    pcall(vim.keymap.del, 'n', '`')
     if msg then vim.notify(msg) end
   end
 
   local function tick()
     if not vim.api.nvim_win_is_valid(scroll_win) then return stop() end
+    if paused then return end
     if vim.api.nvim_get_current_win() == scroll_win and vim.fn.mode() ~= 'n' then return end
     vim.api.nvim_win_call(scroll_win, function()
-      if vim.fn.line 'w$' >= vim.fn.line '$' then return stop 'Autoscroll: reached end of buffer' end
-      vim.cmd 'normal! \5' -- \5 is <C-e>: scroll the view down one line
+      -- `w` stops moving once the cursor sits on the buffer's last word --
+      -- that's the end-of-buffer signal.
+      local before = vim.api.nvim_win_get_cursor(0)
+      vim.cmd 'normal! w'
+      local after = vim.api.nvim_win_get_cursor(0)
+      if before[1] == after[1] and before[2] == after[2] then return stop 'Autoscroll: reached end of buffer' end
     end)
+  end
+
+  local function pause_toggle()
+    paused = not paused
+    vim.notify(paused and 'Autoscroll paused' or 'Autoscroll resumed')
   end
 
   local function toggle()
     if timer then return stop 'Autoscroll off' end
     scroll_win = vim.api.nvim_get_current_win()
+    paused = false
+    vim.keymap.set('n', '`', pause_toggle, { desc = 'Autoscroll pause/unpause' })
     timer = assert(vim.uv.new_timer())
-    timer:start(interval_ms, interval_ms, vim.schedule_wrap(tick))
+    timer:start(interval_ms(), interval_ms(), vim.schedule_wrap(tick))
     vim.notify 'Autoscroll on'
   end
 
   vim.keymap.set('n', '<leader>`', toggle, { desc = 'Autoscroll toggle' })
+
+  vim.api.nvim_create_user_command('Autoscroll', function(opts)
+    local sub, val = opts.fargs[1], opts.fargs[2]
+    if sub ~= 'speed' then
+      vim.notify('Usage: :Autoscroll speed <words-per-second>', vim.log.levels.WARN)
+      return
+    end
+    if not val then
+      vim.notify(('Autoscroll speed: %g words/sec'):format(words_per_second))
+      return
+    end
+    local n = tonumber(val)
+    if not n or n <= 0 then
+      vim.notify('Autoscroll speed must be a positive number (words/sec)', vim.log.levels.ERROR)
+      return
+    end
+    words_per_second = n
+    -- Apply to a session already in flight, not just the next one.
+    if timer then
+      timer:stop()
+      timer:start(interval_ms(), interval_ms(), vim.schedule_wrap(tick))
+    end
+    vim.notify(('Autoscroll speed: %g words/sec'):format(n))
+  end, { nargs = '+', desc = 'Autoscroll settings (:Autoscroll speed <n>)', complete = function() return { 'speed' } end })
+  vim.cmd.cnoreabbrev('autoscroll Autoscroll')
+end
+
+-- ============================================================
+-- SECTION 19: PERSONAL EXTRAS -- MARKDOWN PREVIEW
+-- ============================================================
+do
+  -- Render markdown (READMEs, notes) prettily in place: headings, lists,
+  -- checkboxes, tables, and code blocks are drawn using the treesitter
+  -- markdown parsers already installed above -- no browser, no build step.
+  -- The buffer renders pretty in Normal mode and drops back to raw markdown
+  -- for the line you're editing in Insert mode.
+  vim.pack.add { gh 'MeanderingProgrammer/render-markdown.nvim' }
+  require('render-markdown').setup {}
+
+  vim.keymap.set('n', '<leader>tm', function() require('render-markdown').toggle() end, { desc = '[T]oggle [m]arkdown render' })
+end
+
+-- ============================================================
+-- SECTION 20: PERSONAL EXTRAS -- STICKY SCOPE HEADERS
+-- ============================================================
+do
+  -- Pin the lines that declare the scopes the cursor is inside (function,
+  -- class/struct, if/for block, markdown heading, ...) to the top of the
+  -- window as you scroll past them. Works in any filetype with a treesitter
+  -- parser attached -- same parsers SECTION 9 already installs.
+  vim.pack.add { gh 'nvim-treesitter/nvim-treesitter-context' }
+  require('treesitter-context').setup {
+    -- Cap how much of the window the pinned context may take, so deeply
+    -- nested code doesn't bury the actual text under a wall of headers.
+    max_lines = 4,
+    -- Collapse each scope to its declaration line even if the declaration
+    -- spans several (e.g. a long parameter list).
+    multiline_threshold = 1,
+  }
+
+  vim.keymap.set('n', '<leader>tc', '<cmd>TSContext toggle<CR>', { desc = '[T]oggle sticky scope [c]ontext' })
 end
 
 -- The line beneath this is called `modeline`. See `:help modeline`
