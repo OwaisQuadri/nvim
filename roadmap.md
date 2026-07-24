@@ -32,6 +32,10 @@ Sources at bottom.
 2. **Best-path scope.** Start with the curated pattern→optimal-keys table that GROWS from
    the keystroke log (r4→g2). The general optimal-path solver (g4) stays a LATER research
    bet, not in the headline.
+3. **r1 shipped (2026-07-24).** hardtime.nvim adopted in gentle `restriction_mode='hint'`
+   (suggests, never blocks), `disable_mouse=false`, `<leader>tH` toggle; a `strict` local
+   in init.lua SECTION 21 flips it to block mode. This clears the widest prerequisite for
+   the coach loop — g2 (real-time best-path coach) is now unblocked.
 
 ## Ranking (WSJF = value+time-crit+unblock ÷ size; founder gut elevates the coach loop)
 
@@ -57,9 +61,9 @@ Sources at bottom.
 
 ```json
 {"steps": [
-  {"id": "r1", "description": "Adopt hardtime.nvim as the inefficiency-detection substrate the coach builds on: add to init.lua's vim.pack list with a gentle config (hints + habit reports on; hard key-blocking non-punishing), document the toggle. DoD: spam jjjj -> hint appears; :Hardtime toggle works; README row added.", "route": "light", "depends_on": [], "status": "todo"},
+  {"id": "r1", "description": "Adopt hardtime.nvim as the inefficiency-detection substrate the coach builds on: add to init.lua's vim.pack list with a gentle config (hints + habit reports on; hard key-blocking non-punishing), document the toggle. DoD: spam jjjj -> hint appears; :Hardtime toggle works; README row added.", "route": "light", "depends_on": [], "status": "done"},
   {"id": "r2", "description": "Perf baseline: tools/perf/bench.sh runs `nvim --headless -u init.lua --startuptime` x10 (drop cold run), prints median+p90, writes median to tools/perf/baseline.txt. DoD: two runs stable within ~10%, baseline file written.", "route": "light", "depends_on": [], "status": "todo"},
-  {"id": "g1", "description": "Mandatory daily vim-golf gate: a VimEnter hook opens a modal challenge buffer (input->target text, keystroke-counted, VimGolf-style content) that must be solved before normal editing. Required once per day, resetting at 06:00 local time: the first launch after the 6am boundary requires a fresh clear and records a last-cleared day-stamp; later same-day launches skip the gate. Mandatory escape hatch :GolfSkip (+ difficulty dial) so a buggy win-check never locks the editor. DoD: on the first post-6am launch the challenge shows; solving it dismisses+restores the session and stamps the day; a second same-day launch does NOT re-gate; :GolfSkip bypasses; a headless test drives a solve and asserts dismissal + the no-re-gate-same-day behavior.", "route": "heavy", "depends_on": [], "status": "todo"},
+  {"id": "g1", "description": "Mandatory daily vim-golf gate: a VimEnter hook opens a modal challenge buffer (input->target text, keystroke-counted, VimGolf-style content) that must be solved before normal editing. Required once per day, resetting at 06:00 local time: the first launch after the 6am boundary requires a fresh clear and records a last-cleared day-stamp; later same-day launches skip the gate. Mandatory escape hatch :GolfSkip (+ difficulty dial) so a buggy win-check never locks the editor. DoD: on the first post-6am launch the challenge shows; solving it dismisses+restores the session and stamps the day; a second same-day launch does NOT re-gate; :GolfSkip bypasses; a headless test drives a solve and asserts dismissal + the no-re-gate-same-day behavior. CONSTRAINT (r11): the gate MUST no-op when Neovim has no UI (headless, `#vim.api.nvim_list_uis() == 0`) so r11's smoke runner and any `nvim --headless` automation never hang on the challenge.", "route": "heavy", "depends_on": ["r11"], "status": "todo"},
   {"id": "g2", "description": "Real-time best-path coach: on a hardtime-detected inefficient action, look it up in a curated pattern->optimal-keys table and show the best path for what was just done (e.g. A+backspace line-merge -> J). New rules are one table entry. DoD: performing the A+backspace pattern surfaces the 'use J' best path; a clean action surfaces nothing (no false positives); rule table has a headless unit test.", "route": "heavy", "depends_on": ["r1"], "status": "todo"},
   {"id": "g3", "description": "Redo-with-handholding: after g2 flags an inefficiency, optionally revert the just-made edit and step the user through the optimal keystrokes (highlight next key, advance on correct press), with a config of off / hint-only / full-handhold (disableable per user ask). DoD: with handholding on, a flagged edit is reverted and the guided redo advances key-by-key to the target; with it off, nothing triggers; config switch verified in a headless test.", "route": "heavy", "depends_on": ["g2"], "status": "todo"},
   {"id": "r3", "description": "Adopt a keystroke-log source (keystats.nvim or keylog.nvim), gated/toggleable, log under stdpath('data'/'state') — this becomes the coach's training data. DoD: after a session the log has per-key counts; toggle works; README row added.", "route": "light", "depends_on": [], "status": "todo"},
@@ -69,16 +73,19 @@ Sources at bottom.
   {"id": "r6", "description": "Adopt precognition.nvim, off by default with a toggle. DoD: toggle shows motion hints; README row added.", "route": "light", "depends_on": [], "status": "todo"},
   {"id": "r8", "description": "COARSE placeholder — coaching digest: on-demand/weekly summary combining r4's mining with hardtime's flagged habits into 'cut these dead binds, replace these patterns'. Own harness-plan pass.", "route": "heavy", "depends_on": ["r4"], "status": "todo"},
   {"id": "r9", "description": "COARSE placeholder — seamless <C-h/j/k/l> nav between Neovim and a terminal multiplexer. GATED: confirm the user runs tmux/zellij (Ghostty splits may make it moot). Own harness-plan pass.", "route": "heavy", "depends_on": [], "status": "todo"},
-  {"id": "r10", "description": "COARSE placeholder — make-it-fast backlog: each optimization surfaced by r5 filed as its own ticket with its own research + verify DoD.", "route": "heavy", "depends_on": ["r5"], "status": "todo"}
+  {"id": "r10", "description": "COARSE placeholder — make-it-fast backlog: each optimization surfaced by r5 filed as its own ticket with its own research + verify DoD.", "route": "heavy", "depends_on": ["r5"], "status": "todo"},
+  {"id": "r11", "description": "Durable headless test harness: promote test.sh from a stub to a real `nvim --headless -u init.lua` smoke runner that asserts each plugin/command loads and drives a feature through its states (pair-program verification model: one JSON state per line). Bake in the two gotchas this repo already hit: (1) hardtime's ~500ms deferred setup needs a `vim.wait` before asserting; (2) any startup gate (g1) must be skipped under headless so the runner never hangs. DoD: test.sh exits non-zero on a deliberately-broken config and zero on green; its first case drives the hardtime hint+toggle; g1 (and future features) call it to satisfy their headless-test DoD.", "route": "heavy", "depends_on": [], "status": "todo"}
 ]}
 ```
 
-- **NOW (Deep):** r1 (substrate, do first) · r2 (cheap perf guard) · g1 (headline gate).
-- **NEXT (Deep):** g2 (←r1) · g3 (←g2) · r3 (adopt) · r4 (←r3) · r5 (←r2) · r6.
+- **NOW (Deep):** ✅ r1 done (substrate) · r2 (perf guard) · r11 (test harness, hard-blocks
+  g1) · g1 (headline gate, now ←r11) · g2 (coach, unblocked). Ready set = {r2, r11, g2};
+  g1 waits on r11 so the golf gate and the headless runner don't collide.
+- **NEXT (Deep):** g3 (←g2) · r3 (adopt) · r4 (←r3) · r5 (←r2) · r6.
 - **LATER (Coarse, own pass):** g4 (←g2, research) · r8 (←r4) · r9 (gated) · r10 (←r5).
 - **Emergent milestone M1 = "the coach loop works":** convergence where r1+g1+g2+g3 land
-  (detect → best-path → guided redo). r1 is the widest prerequisite. Reaching M1 = the
-  product you described exists end-to-end.
+  (detect → best-path → guided redo). r1 ✅ was the widest prerequisite and is now cleared;
+  M1 remaining = g1 + g2 + g3. Reaching M1 = the product you described exists end-to-end.
 
 ## Brainstorm follow-on (ranked; you pick)
 **novel:** g1 challenges auto-drawn from YOUR real logged weak spots (r4→g1 loop); "streak"

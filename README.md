@@ -67,6 +67,7 @@ scripts for testing the `<D-r>`/`<D-b>` Cmd-chords below.
 - `neo-tree.nvim` (+ `nui.nvim`) — sidebar file explorer, kickstart's optional module, enabled
 - `render-markdown.nvim` — renders markdown (READMEs, notes) prettily in the buffer
 - `nvim-treesitter-context` — sticky headers: pins the enclosing function/class/struct (or markdown heading) to the top of the window
+- `hardtime.nvim` — habit coach: flags inefficient key use (mashing `j`/`k`/arrows, repeated `w`/`b`, …) and hints a better motion. Gentle "hint" mode by default — it suggests, never blocks; `:Hardtime report` lists your top habits, `:Hardtime toggle` / `<leader>tH` turns it off. Flip the `strict` local in init.lua's SECTION 21 to `true` for blocking mode.
 
 ## Keymaps
 
@@ -116,6 +117,7 @@ Leader key is **Space**.
 | `<leader>tw` | Toggle git word diff |
 | `<leader>tm` | Toggle markdown render (on by default in markdown buffers) |
 | `<leader>tc` | Toggle sticky scope context (on by default) |
+| `<leader>tH` | Toggle hardtime habit coach (on by default) |
 
 ### Git hunks (`<leader>h*`, via gitsigns)
 
