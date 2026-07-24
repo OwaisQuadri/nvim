@@ -2251,5 +2251,29 @@ do
   vim.keymap.set('n', '<leader>tc', '<cmd>TSContext toggle<CR>', { desc = '[T]oggle sticky scope [c]ontext' })
 end
 
+-- ============================================================
+-- SECTION 21: HABIT COACH -- HARDTIME (inefficiency detection substrate)
+-- ============================================================
+do
+  -- hardtime.nvim watches for inefficient key habits (mashing j/k/arrows,
+  -- repeated w/b, hjkl instead of a motion, ...) and suggests a better move.
+  -- In the gentle default "hint" mode it only SUGGESTS -- the keystroke still
+  -- goes through. This is the detection layer the real-time best-path coach
+  -- (roadmap g2) builds on; `:Hardtime report` is its habit training data.
+  --
+  -- Flip `strict` to true for "block" mode: an over-repeated key is actually
+  -- blocked after max_count presses instead of merely hinted.
+  local strict = false
+
+  vim.pack.add { gh 'm4xshen/hardtime.nvim' } -- nui.nvim (its dep) already added by neo-tree
+  require('hardtime').setup {
+    restriction_mode = strict and 'block' or 'hint',
+    disable_mouse = false, -- gentle: leave the mouse usable
+    -- `hint` (better-motion suggestions) and `notification` are on by default.
+  }
+
+  vim.keymap.set('n', '<leader>tH', '<cmd>Hardtime toggle<CR>', { desc = '[T]oggle [H]ardtime habit coach' })
+end
+
 -- The line beneath this is called `modeline`. See `:help modeline`
 -- vim: ts=2 sts=2 sw=2 et
