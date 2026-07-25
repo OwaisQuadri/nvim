@@ -690,7 +690,7 @@ expect_lacks "underflowing sample leaks no awk division error" "division by zero
 
 # THREE-TIME REGRESSION — num()'s `x + 0 < 1e308` overflow guard, pinned at the
 # SAMPLE path. Reviews 1 and 2 fixed the char guard half and left this half
-# unpinned: deleting the expression kept the suite 177/177 green while bench.sh
+# unpinned: deleting the expression kept the whole suite green while bench.sh
 # wrote {"ms":inf} — not JSON — into history at exit 0/FIRST. The 400-digit
 # history row above only exercises the READER; a value this shape has to come
 # through a startuptime log to reach num(). All digits, so the char guard passes
@@ -740,8 +740,8 @@ seed_row 60.000
 check "low load -> normal verdict" 0 -- env BENCH_LOAD_OVERRIDE=0.20 "$BENCH" --runs 3
 
 # The verdict uses max(load_before, load_after), and with ONE constant override
-# that max was invisible: replacing it with either operand alone survived all 177
-# cases. The override is a comma sequence indexed by reading (0 = before,
+# that max was invisible: replacing it with either operand alone survived the whole
+# suite. The override is a comma sequence indexed by reading (0 = before,
 # 1 = after), so a run can climb or fall mid-flight. The pair below fails if the
 # max collapses to EITHER operand — climbing kills `load_before`, falling kills
 # `load_after` — and both fail if the fixture ever goes constant again.

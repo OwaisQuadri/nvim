@@ -12,59 +12,28 @@
 #   ./tools/perf/bench.sh --json           # print the recorded history row instead
 #   ./tools/perf/bench.sh --accept "why"   # reset the floor (deliberate slowdown)
 #
-# Runtime deps: nvim, perl with JSON::PP (core since perl 5.14). NOT python3 —
-# README documents a Windows Git Bash path where perl ships and python3 usually
-# does not, and a guard that cannot run on a supported platform is not a guard.
+# Runtime deps: nvim, perl with JSON::PP (core since perl 5.14). Not python3.
 #
-# Exit codes: 0 = PASS or FIRST, 1 = REGRESS, 2 = usage/environment error OR a
-# broken dataset, 3 = INCONCLUSIVE (the machine was too loaded for the reading to
-# mean anything). Every failure path lands on one of those four, and no failure
-# is ever reported as FIRST: "there is nothing to compare against" and "the
-# comparison broke" must never look alike, because the second one exiting 0 is
-# exactly how a real regression gets waved through.
+# Exit codes: 0 = PASS or FIRST, 1 = REGRESS, 2 = usage/environment error or a
+# broken dataset, 3 = INCONCLUSIVE (machine too loaded for the reading to mean
+# anything).
 #
-# WHY a floor and not a recorded baseline: four baselines in a row were recorded
-# on a loaded machine (66.736, 67.959, 63.877, 62.712 ms at loads up to 15.18 on
-# 10 cpus) while the quiet-machine median is ~54.7ms, and a verification run at
-# load 23.53 still reported PASS against the inflated scalar — an inflated
-# baseline silently hides a real regression. Load can only ever inflate a
-# wall-clock sample, never deflate it, so the MINIMUM median across history is
-# the best available estimate of the config's true cost, and it self-corrects the
-# moment one quiet run lands. Chasing an idle machine failed four times running;
-# recording load as data needs no chasing.
-#
-# The numbers stay machine-relative, so the floor is machine-SCOPED: rows carry
-# host/os/arch/cpus and only rows matching this host+arch feed this machine's
-# verdict. Foreign rows stay in the file — it is committed, shared, and meant for
-# graphing — they just never decide a verdict here. The SAME scoping applies to
-# --accept markers (see history_stats): a marker is one machine's "I meant it",
-# not a global reset switch.
 set -euo pipefail
 
-# LC_ALL=C before ANY awk / printf / sort / date runs. This script validates
-# numbers and then RE-FORMATS them through awk's locale-dependent %.*f: under
-# LC_ALL=de_DE.UTF-8 it emitted {"median":60,000,...}, so every recorded row was
-# unparseable, the floor never armed, and three consecutive runs each reported
-# FIRST / exit 0 with a +200% regression sitting in the history. `sort -n` in
-# pct() misreads a comma decimal the same way. C is the only locale in which the
-# numbers we print are the numbers we validated.
+# LC_ALL=C before any awk/printf/sort: awk's locale-dependent %.*f under
+# de_DE.UTF-8 emits comma decimals (60,000), which is not JSON and silently
+# voids the floor; `sort -n` misreads the same comma.
 export LC_ALL=C
 
-# A median at or below this cannot be a real Neovim startup with this plugin set
-# (the quiet-machine reading is ~54.7ms; even `nvim -u NONE` does not get near
-# 5ms once a plugin list is walked). A row this low therefore means a gutted or
-# half-loaded config — an init.lua that bailed early, a plugin dir that vanished
-# — and if it became the floor, every honest run afterwards would REGRESS until
-# somebody ran --accept. Load can only ever inflate a sample, so DEFLATION is
-# the one direction the physics cannot explain and the one that has to be
-# filtered out.
+# A median at or below this cannot be real startup with a plugin set loaded
+# (the quiet-machine median is ~54.7ms), so it means a gutted or half-loaded
+# config. Load can only ever inflate a sample, so deflation is the one
+# direction that must be filtered or it sticks as an unbeatable floor.
 SANITY_MIN_MS=5.0
 
-# Sentinel on the history reader's one output line. Anything else on stdout —
-# a broken interpreter, a stray warning, junk — must be rejected instead of
-# parsed into a floor. Bumped to v2 when the line gained the ignored-marker
-# count; the tag and the parse below are the same file, so it is a readability
-# marker, not a negotiated protocol version.
+# Sentinel on the history reader's one output line: anything else on stdout
+# (broken interpreter, stray warning, junk) must be rejected, not parsed into
+# a floor.
 HISTORY_READER_TAG="bench-history-v2"
 
 RUNS=10
@@ -74,12 +43,14 @@ ACCEPT_SET=0
 
 usage() {
   # Prints the header above, stopping before the WHY note (rationale, not usage).
-  sed -n '2,/^# WHY/{/^# WHY/q;p;}' "$0" | sed 's/^# \{0,1\}//'
+  # Stops at the first non-comment line rather than a sentinel comment: the old
+  # terminator was a `# WHY` block that a comment purge deleted, which would
+  # have made --help print the entire script.
+  sed -n '2,${/^#/!q; s/^# \{0,1\}//p;}' "$0"
 }
 
-# Every non-zero exit goes through here, so the documented exit codes are the
-# only exit codes: a failing helper must not leak its own status (--accept once
-# exited 9 because a failed json encode propagated straight out).
+# Every non-zero exit goes through die(), so a failing helper cannot leak its
+# own status (--accept once exited 9 when a failed json encode escaped).
 die() { # <exit-code> <reason>
   printf 'bench.sh: %s\n' "$2" >&2
   exit "$1"
@@ -125,24 +96,17 @@ INIT="$REPO_ROOT/init.lua"
 HISTORY="$SCRIPT_DIR/history.ndjson"
 LOCK="$REPO_ROOT/nvim-pack-lock.json"
 
-# One write() to an O_APPEND fd is atomic, so two concurrent runs can never
-# interleave halves of a row. (PIPE_BUF governs *pipes*, not regular files — the
-# earlier comment here said otherwise; keeping --runs <= 50 and the row well
-# under 4096 bytes is belt-and-braces, not the guarantee itself.)
+# One write() to an O_APPEND fd is atomic, so two concurrent runs cannot
+# interleave halves of a row. PIPE_BUF governs pipes, not regular files;
+# keeping a row under 4096 bytes is belt-and-braces, not the guarantee.
 #
-# The file is append-only and committed, so its last line can be truncated by a
-# killed run or a merge. Appending after that welds two rows into one invalid
-# line and destroys BOTH (observed: run 1 REGRESSed correctly, run 2 read floor
-# null / FIRST / exit 0). So when the last byte is not a newline the payload
-# starts with one — still exactly one write.
-# A failed append is an ENVIRONMENT error (exit 2), never the verdict. A history
-# that is readable but not writable (checked-out read-only, wrong owner, full
-# disk) made the `>>` fail under `set -e` and the script exited 1 — the REGRESS
-# code — on a run whose verdict was PASS, printing a raw `bash: ...: Permission
-# denied` instead of a bench.sh: message. --accept and --json exited 1 the same
-# way, contradicting their documented codes. stderr is redirected BEFORE the
-# append so the shell's own redirection error cannot leak past die()'s message
-# (bash applies redirections left to right).
+# The file is append-only and committed, so its last line can be truncated by
+# a killed run or a merge. Appending onto that welds two rows into one
+# invalid line and destroys BOTH, so the payload leads with a newline.
+# A failed append is an environment error (exit 2), never the verdict: it used
+# to exit 1, the REGRESS code, on a PASS run. stderr is redirected before the
+# append so the shell's own error cannot leak past die() (bash applies
+# redirections left to right).
 append_row() { # <json-line>
   local lead=""
   if [ -s "$HISTORY" ] && [ "$(tail -c 1 "$HISTORY" | wc -l | tr -d ' ')" -eq 0 ]; then
@@ -199,10 +163,9 @@ os_json="null"
 
 if [ "$ACCEPT_SET" -eq 1 ]; then
   [ -n "$ACCEPT" ] || die 2 "--accept requires a non-empty note"
-  # The note is free text from argv, and the marker line has the same one-write
-  # budget as a row: a 5000-char note wrote a ~5100-byte line, past the 4096
-  # bound that `--runs <= 50` exists to hold. 500 chars is more than a reason
-  # needs, and even worst-case escaping (6 bytes out per byte in) stays inside.
+# A marker line has the same one-write budget as a row: an unbounded note wrote
+# ~5100 bytes. 500 chars is plenty, and worst-case escaping (6 bytes out per
+# byte in) still fits.
   [ "${#ACCEPT}" -le 500 ] || die 2 "--accept note must be 500 characters or fewer (a history line must stay one atomic write)"
   note_json=""
   note_json="$(json_string "$ACCEPT")" || die 2 "could not encode the --accept note as JSON (perl/JSON::PP failed)"
@@ -230,21 +193,14 @@ command -v perl >/dev/null 2>&1 || die 2 "perl not on PATH (needed for wall_ms)"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
-# Normalize to a bare fixed-point float, or "" when unparseable. JSON has no
-# leading zeros, bare dots, or inf: --startuptime's clock column is zero-padded
-# ("059.645"), and anything weirder must become null rather than an invalid
-# token. The character guard is what keeps an embedded letter ("12x34") from
-# numifying to 12.
-#
-# BOTH halves are load-bearing and BOTH have been dropped by past rewrites:
-#   - the character guard: dropped once (restored 2026-07-24).
-#   - `x + 0 < 1e308`: an all-digit value the char guard happily passes (400 nines
-#     out of a garbled startuptime log) overflows to inf in awk and printf writes
-#     the literal token `inf` — {"ms":inf} is not JSON, so the row it lands in
-#     destroys itself and every reader of the dataset. THREE reviews in a row
-#     found this expression unpinned. It is now pinned at the SAMPLE path by
-#     bench_test.sh ("a 400-digit sample"); do not delete either guard, and if
-#     you rewrite num(), run that case first.
+# Bare fixed-point float, or "" if unparseable (JSON allows no leading zeros,
+# bare dots, or inf). The character guard stops an embedded letter ("12x34")
+# numifying to 12 -- dropped once already, restored 2026-07-24.
+# x + 0 < 1e308 catches what the char guard cannot: a value of 400 nines is all
+# digits, but overflows to inf in awk and prints the literal token, and
+# {"ms":inf} is not JSON -- it destroys the row and every reader of it. THREE
+# reviews missed this. Pinned at the sample path by bench_test.sh's 400-digit
+# case; run that case before touching either guard.
 num() { # <raw> <decimals>
   case "$1" in
     '' | *[!0-9.]* | *.*.* | '.') return 0 ;;
@@ -264,43 +220,28 @@ num_pos() { # <raw> <decimals>
   printf '%s\n' "$v"
 }
 
-# Reads history.ndjson STRICTLY (JSON::PP, never jq: a truncated line must fail
-# to decode and be COUNTED, not half-parsed into a number) and prints exactly one
-# line:
-#
+# Reads history.ndjson STRICTLY (JSON::PP, never jq -- a truncated line must
+# fail to decode and be COUNTED, not half-parsed) and prints exactly one line:
 #   bench-history-v2 <floor|-> <valid> <invalid> <foreign> <low> <markers_foreign>
 #
 # scoped to the rows after the last floor-reset marker THIS MACHINE wrote, and
 # among those to the rows whose host+arch match this machine.
 #
-# DELIBERATELY NOT scoped by commit or by the plugin-lock hash. nvim-pack-lock.json
-# is tracked and pins an exact rev per plugin, so the commit already implies the
-# intended plugin set — and more to the point a plugin-driven slowdown IS a
-# regression worth flagging, with --accept as the deliberate-change escape hatch.
-# Filtering by lock would make every plugin bump invisible to the guard. Do not
-# add it.
+# Deliberately NOT scoped by commit or lock hash -- a plugin-driven slowdown IS
+# a regression (see CLAUDE.md). Do not add lock filtering.
 #
-# Rows with no host/arch (recorded before provenance existed) cannot be attributed
-# to this machine, so they count as foreign: unattributable is not the same as
-# mine, and a foreign row that happened to be FASTER would manufacture a fake
-# regression here.
+# Rows with no host/arch (pre-provenance) count as foreign, not mine:
+# unattributable is not mine, and a foreign row that happened to be faster
+# would manufacture a regression here.
 #
-# MARKERS ARE SCOPED THE SAME WAY, and for a sharper reason. history.ndjson is
-# committed and shared, so somebody else's --accept arrives in this file; when a
-# marker reset every machine's floor, a foreign line wiped this machine's window
-# and the next run reported FIRST / exit 0 with a +200% regression in hand — and
-# it also laundered a corrupt dataset (exit 2) into that same FIRST / exit 0.
-# Silent green is the one outcome this guard exists to prevent.
+# Markers are scoped the same way. Committed and shared means someone else's
+# --accept lands in this file too, and unscoped it also launders a corrupt
+# dataset into a false FIRST.
 #
-# A marker with MISSING machine identity (no host, or no arch — the shape written
-# before markers carried arch) is treated as foreign, i.e. it resets NOTHING.
-# That is the conservative reading because the two errors are not symmetric:
-# ignoring a marker that really was mine costs a loud REGRESS that one local
-# `--accept` clears, while honouring a marker that was not mine deletes the floor
-# and hides a real regression behind exit 0. Loud-and-wrong is recoverable;
-# silent-and-wrong is not. (No legacy markers exist in the committed history —
-# checked, zero — so nothing is being stranded by this.) Ignored markers are
-# COUNTED and surfaced, so "my --accept did nothing" is never a mystery.
+# A marker missing host or arch is foreign too, so it resets nothing: ignoring
+# a marker that was mine costs a recoverable loud REGRESS, honouring one that
+# was not hides a real regression. Loud-wrong beats silent-wrong. Counted and
+# surfaced, so "my --accept did nothing" is never a mystery.
 history_stats() {
   BENCH_HISTORY="$HISTORY" BENCH_HOST="$host" BENCH_ARCH="$arch" \
   BENCH_SANITY_MIN="$SANITY_MIN_MS" BENCH_TAG="$HISTORY_READER_TAG" \
@@ -331,8 +272,7 @@ history_stats() {
         if (!defined($row) || ref($row) ne "HASH") { $invalid++; next; }
         my $mk = $row->{marker};
         if (defined($mk) && !ref($mk) && $mk eq "floor-reset") {
-          # Same host+arch test as the rows below, and for the same reason: a
-          # marker speaks for one machine only. Missing identity = not mine.
+          # A marker speaks for one machine only; missing identity = not mine.
           my $mh = (defined($row->{host}) && !ref($row->{host})) ? $row->{host} : "";
           my $ma = (defined($row->{arch}) && !ref($row->{arch})) ? $row->{arch} : "";
           if ($mh ne $host || $ma ne $arch) { $mforeign++; next; }
@@ -341,24 +281,20 @@ history_stats() {
           next;
         }
         my $m = $row->{median};
-        # Re-encoding IS the strict number test. A JSON string, a bool, null, or
-        # a literal too big for a double all come back quoted / as true / as Inf;
-        # only a real JSON number comes back bare. Doing it this way means a
-        # "12x34"-shaped value can never numify to 12 behind our back, and a
-        # 400-digit literal can never arrive as inf and pass a > 0 check.
+# Re-encoding IS the strict number test: a JSON string, bool, null, or literal
+# too big for a double all come back quoted/true/Inf, and only a real JSON
+# number comes back bare. So "12x34" can never numify to 12, and a 400-digit
+# literal can never arrive as inf and pass a > 0 check.
         my $re = eval { $enc->encode($m) };
         if (!defined($re) || $re !~ /\A-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][-+]?[0-9]+)?\z/) {
           $invalid++; next;
         }
-        # Unrepresentable at the precision rows are written with is corrupt, not
-        # small: sprintf %.3f turns 1e-300 into "0.000", and a 0 floor divides.
-        #
-        # `!($m < 1e308)` is NOT redundant with the regex above. 1e400 overflows
-        # to Inf and the regex rejects the re-encode, but 1e308 itself is a
-        # FINITE double: it re-encodes as the bare token 1e+308, the regex
-        # accepts it, and it would become a floor no honest run can ever exceed —
-        # PASS forever. Pinned by the 1e308 rows in bench_test.sh; keep it.
-        # (No apostrophes in this block: it is inside a single-quoted perl -e.)
+# Unrepresentable at this precision is corrupt, not small: sprintf %.3f turns
+# 1e-300 into "0.000", and a 0 floor divides. !($m < 1e308) is NOT redundant
+# with the regex above -- 1e308 is a FINITE double that re-encodes as bare
+# 1e+308 and passes it, so without this it becomes a floor no honest run can
+# beat. Pinned by the 1e308 rows in bench_test.sh. (No apostrophes: this is
+# inside a single-quoted perl -e.)
         if (!($m > 0) || !($m < 1e308) || sprintf("%.3f", $m) eq "0.000") { $invalid++; next; }
         my $rh = (defined($row->{host}) && !ref($row->{host})) ? $row->{host} : "";
         my $ra = (defined($row->{arch}) && !ref($row->{arch})) ? $row->{arch} : "";
@@ -380,10 +316,9 @@ history_stats() {
   '
 }
 
-# The reader is a subprocess, so its exit status is checked EXPLICITLY. A bare
-# `read <<EOF $(history_stats)` swallowed it: with a broken interpreter, a seeded
-# 20.0 floor against a 60ms median reported FIRST / floor null / exit 0 — a +200%
-# regression waved through green.
+# The reader is a subprocess and its exit status is checked EXPLICITLY: a bare
+# `read <<EOF $(history_stats)` swallows it, and a broken interpreter then
+# reported FIRST / floor null / exit 0 over a real regression.
 reader_err="$TMP/history-read.err"
 stats_out=""
 stats_rc=0
@@ -412,27 +347,18 @@ else
   [ -n "$floor" ] || die 2 "history reader returned a floor that is not a positive number: $(printf '%s' "$stats_out" | cut -c1-120)"
 fi
 
-# FIRST is legitimate ONLY when there is genuinely nothing to compare against:
-# no file, an empty file, only markers, or rows that were all legitimately
-# excluded (another machine / below the sanity floor). Data rows present and NOT
-# ONE of them parseable is a corrupt dataset, and reporting that as FIRST/0 is
-# the whole defect this guard exists to remove.
+# FIRST is legitimate only when there is genuinely nothing to compare against
+# (no file, empty, markers only, or every row excluded) -- never when the rows
+# exist but all failed to parse.
 if [ -z "$floor" ] && [ "$rows_invalid" -gt 0 ]; then
   die 2 "$HISTORY has $rows_invalid unparseable row(s) since the last --accept and no usable row: the dataset is BROKEN, not empty. Repair the file, or start a fresh window with: $0 --accept \"why\""
 fi
 
-# BENCH_LOAD_OVERRIDE is read HERE and nowhere else, so the load-dependent
-# verdict is drivable headlessly from bench_test.sh.
-#
-# The override is a COMMA-SEPARATED SEQUENCE indexed by WHICH reading this is —
-# reading 0 is load_before, reading 1 is load_after, and the last element repeats
-# — so "0.10,99" drives a run whose load climbed mid-flight. A single value
-# behaves exactly as before. This exists because a CONSTANT fixture made
-# max(load_before, load_after) unobservable: replacing the max with either
-# operand alone survived the entire suite, the same vacuity that let a constant
-# 60.000 fake nvim hide a median/p90 swap. A fixture that cannot vary cannot test
-# anything that depends on variation. Indexed rather than stateful because each
-# call runs in a `$(...)` subshell, where a walked cursor would be discarded.
+# BENCH_LOAD_OVERRIDE is read HERE and nowhere else, so bench_test.sh can drive
+# the load verdict headlessly. Format: comma-separated, indexed by reading
+# (0 = load_before, 1 = load_after, last element repeats); a single value
+# behaves as before. Indexed rather than stateful because each call runs in
+# its own $(...) subshell, where a walked cursor would be discarded.
 load_avg() { # <nth reading: 0 = before the runs, 1 = after>
   local raw="" seq="${BENCH_LOAD_OVERRIDE:-}" i=0
   if [ -n "$seq" ]; then
@@ -456,10 +382,9 @@ else
   cpus="$(sysctl -n hw.ncpu 2>/dev/null || true)"
 fi
 cpus="$(printf '%s' "$cpus" | tr -cd '0-9')"
-# Zero is not a cpu count: `load / cpus` leaked a raw `awk: division by zero`.
-# An unknown count means the load gate is INERT, and that has to be said out
-# loud — PASS printed at load 99 with nothing indicating the gate never ran is
-# indistinguishable from a real PASS.
+# cpus=0 is not a cpu count (load / cpus leaked a raw awk division by zero).
+# An unknown count means the load gate is INERT, and that must be said out
+# loud: a silent PASS at load 99 is indistinguishable from a real one.
 if [ -n "$cpus" ]; then
   [ "$cpus" -gt 0 ] || cpus=""
 fi
