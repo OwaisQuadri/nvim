@@ -472,6 +472,49 @@ end
 ---@return string
 local function gh(repo) return 'https://github.com/' .. repo end
 
+-- The debugger core, shared by the Swift lane (SECTION 22, macOS only) and the
+-- Flutter lane (SECTION 23, everywhere). Either may be the one that runs on a
+-- given machine, and on a Mac both do, so whichever gets here first pays for it
+-- and the other reuses it. Everything language-specific stays in its own
+-- section; this is only the pieces neither owns.
+local dap_ready = false
+local function ensure_debugger()
+  if dap_ready then return require 'dap' end
+
+  vim.pack.add {
+    gh 'mfussenegger/nvim-dap',
+    gh 'nvim-neotest/nvim-nio', -- nvim-dap-ui's only hard dependency
+    gh 'rcarriga/nvim-dap-ui',
+  }
+
+  local dap, dapui = require 'dap', require 'dapui'
+  dapui.setup {} -- the default layout already includes the console pane app logs go to
+  dap.listeners.after.event_initialized.dapui = dapui.open
+  dap.listeners.before.event_terminated.dapui = dapui.close
+  dap.listeners.before.event_exited.dapui = dapui.close
+
+  -- Flagged only once everything above survived. Setting it on the way in would
+  -- latch a half-built debugger (say, an offline first launch where the clone
+  -- fails) and every later call would hand back a dap with no panes wired.
+  dap_ready = true
+  return dap
+end
+
+-- Stepping keeps DAP's cross-editor F-key defaults (same as VS Code), so the
+-- muscle memory carries over and the `<leader>d*` namespaces stay flat lists of
+-- verbs rather than half verbs and half steps. Bound once here rather than per
+-- lane: two lanes binding the same four keys would come down to section order,
+-- and the loser would silently win.
+for key, step in pairs { ['<F5>'] = 'continue', ['<F10>'] = 'step_over', ['<F11>'] = 'step_into', ['<F12>'] = 'step_out' } do
+  vim.keymap.set('n', key, function() ensure_debugger()[step]() end, { desc = '[D]ebug: ' .. step:gsub('_', ' ') })
+end
+vim.keymap.set('n', '<leader>du', function()
+  ensure_debugger()
+  require('dapui').toggle()
+end, { desc = '[D]ebug: toggle [U]I panels' })
+-- The `<leader>d` which-key group is registered in SECTION 24, not here:
+-- which-key itself isn't installed until SECTION 4.
+
 -- ============================================================
 -- SECTION 4: UI / CORE UX PLUGINS
 -- guess-indent, gitsigns, which-key, colorscheme, todo-comments, mini modules
@@ -1610,6 +1653,11 @@ do
     -- But for many setups, the LSP (`ts_ls`) will work just fine
     ts_ls = {},
 
+    -- ESLint, for React Native / Expo and anything else JS. It reads the
+    -- project's own eslint config and its own installed eslint, so it is inert
+    -- in a repo that doesn't lint -- no config here beyond turning it on.
+    eslint = {},
+
     stylua = {}, -- Used to format Lua code
 
     -- Special Lua Config, as recommended by neovim help docs
@@ -1670,6 +1718,15 @@ do
     'prettier',
   })
 
+  -- SwiftFormat (SECTION 7) and SwiftLint (SECTION 22) are published as prebuilt
+  -- binaries for Apple Silicon and glibc Linux only -- there is no Windows and
+  -- no `darwin_x64` asset for either. Mason matches on that target triple, not
+  -- on OS family, so asking for them anywhere else raises "The current platform
+  -- is unsupported" and takes the whole install run down with it. Hence the
+  -- arch check and not just a platform one: on an Intel Mac, `brew install
+  -- swiftformat swiftlint` instead and the rest of the config is unaffected.
+  if is_mac and vim.uv.os_uname().machine == 'arm64' then vim.list_extend(ensure_installed, { 'swiftformat', 'swiftlint' }) end
+
   require('mason-tool-installer').setup { ensure_installed = ensure_installed }
 
   for name, server in pairs(servers) do
@@ -1727,6 +1784,8 @@ do
       html = { 'prettier' },
       markdown = { 'prettier' },
       yaml = { 'prettier' },
+      swift = { 'swiftformat' },
+      dart = { 'dart_format' }, -- ships inside the Flutter SDK, so Mason has nothing to install
     },
   }
 
@@ -1836,7 +1895,7 @@ do
 
   -- Ensure basic parsers are installed
   local parsers =
-    { 'bash', 'c', 'diff', 'html', 'lua', 'luadoc', 'markdown', 'markdown_inline', 'query', 'vim', 'vimdoc', 'swift', 'javascript', 'typescript', 'tsx', 'json' }
+    { 'bash', 'c', 'diff', 'html', 'lua', 'luadoc', 'markdown', 'markdown_inline', 'query', 'vim', 'vimdoc', 'swift', 'dart', 'javascript', 'typescript', 'tsx', 'json', 'yaml' }
   require('nvim-treesitter').install(parsers)
 
   ---@param buf integer
@@ -2273,6 +2332,1014 @@ do
   }
 
   vim.keymap.set('n', '<leader>tH', '<cmd>Hardtime toggle<CR>', { desc = '[T]oggle [H]ardtime habit coach' })
+end
+
+-- ============================================================
+-- SECTION 22: SWIFT / XCODE -- BUILD, RUN, TEST, DEBUG, LINT
+-- xcodebuild.nvim, nvim-dap(-ui), nvim-lint + swiftlint
+-- ============================================================
+--
+-- Swift's *editor* side is already wired up elsewhere: the `sourcekit` LSP in
+-- SECTION 6, the `swift` treesitter parser in SECTION 9, `swiftformat` in
+-- SECTION 7. This section adds the Xcode *project* side -- choosing a scheme
+-- and a device, building, running on a simulator, tests, coverage, previews,
+-- and the debugger -- so an iOS/macOS app can be developed without opening
+-- Xcode.
+--
+-- Everything here shells out to `xcodebuild` and `xcrun simctl`, the same tools
+-- Xcode itself drives, so the section is Mac-only and is skipped wholesale on
+-- Windows and Linux rather than half-loaded. `if is_mac then` doubles as this
+-- section's scope block (a bare `return` inside a `do` block would abandon the
+-- rest of the file, not just the section).
+if is_mac then
+  -- xcodebuild.nvim finds its pickers in telescope (SECTION 5) and its floating
+  -- coverage report in nui (added by neo-tree, SECTION 15); both are already on.
+  -- nvim-dap and nvim-dap-ui come from `ensure_debugger()` at file scope, shared
+  -- with the Flutter lane.
+  vim.pack.add {
+    gh 'wojciech-kulik/xcodebuild.nvim',
+    gh 'mfussenegger/nvim-lint',
+  }
+
+  -- Loaded eagerly rather than gated behind "is there an .xcodeproj under the
+  -- cwd?". The three mobile sections together move startup from a ~63ms median
+  -- to ~81ms, and only because the debugger below is deferred -- leaving that
+  -- eager put it past 130ms. A cwd gate would have to re-run project detection
+  -- on every `:cd` to stay correct, which is more moving parts than the
+  -- remaining milliseconds buy back.
+  --
+  -- The plugin keys everything off the cwd, and both of the flags below ship
+  -- off, which makes it strictly a "launch nvim from the project root" tool.
+  -- Turning them on is what lets it follow you around instead:
+  --   * search_in_parent_dirs -- opening nvim in a subfolder (Sources/, a
+  --     package inside a monorepo) still finds the settings written at the
+  --     project root, rather than treating that subfolder as a new project.
+  --   * reload_on_cwd_change -- a `:cd` mid-session re-reads the settings for
+  --     wherever you landed, so cd-ing from a Lua repo into an app just works.
+  -- `:XcodebuildSetup` then searches four levels down for the project file and
+  -- makes *its* directory the build's working directory, so the app doesn't
+  -- have to sit at the repo root either. Choices are saved per project, in
+  -- `.nvim/xcodebuild/settings.json`.
+  require('xcodebuild').setup {
+    project_config = {
+      search_in_parent_dirs = true,
+      reload_on_cwd_change = true,
+    },
+  }
+
+  local function map(keys, action, desc, mode) vim.keymap.set(mode or 'n', keys, action, { desc = desc }) end
+
+  -- The which-key groups are registered here rather than alongside the others
+  -- in SECTION 4, so that a Windows or Linux launch -- which skips this whole
+  -- section -- doesn't show two prefixes that expand to nothing.
+  require('which-key').add { { '<leader>x', group = 'X[c]ode', mode = { 'n', 'v' } } }
+
+  -- `<leader>X` is the one bind worth memorizing: a picker listing every action
+  -- below (and the ~50 more this config doesn't bind). The rest of the Xcode
+  -- verbs hang off `<leader>x*`, following the plugin's own suggested bindings
+  -- except for `<leader>xs`, which upstream gives to failing snapshots; setup
+  -- is the thing you actually reach for, and per-project you reach for it once.
+  map('<leader>X', '<cmd>XcodebuildPicker<CR>', 'Xcode: all actions')
+  map('<leader>xs', '<cmd>XcodebuildSetup<CR>', 'Xcode: [S]etup project (file, scheme, device, test plan)')
+  map('<leader>xb', '<cmd>XcodebuildBuild<CR>', 'Xcode: [B]uild')
+  map('<leader>xr', '<cmd>XcodebuildBuildRun<CR>', 'Xcode: build & [R]un')
+  map('<leader>xk', '<cmd>XcodebuildCancel<CR>', 'Xcode: [K]ill running action')
+  map('<leader>xt', '<cmd>XcodebuildTest<CR>', 'Xcode: run [T]ests')
+  map('<leader>xt', '<cmd>XcodebuildTestSelected<CR>', 'Xcode: run selected [T]ests', 'v')
+  map('<leader>xT', '<cmd>XcodebuildTestClass<CR>', 'Xcode: run current [T]est class')
+  map('<leader>xe', '<cmd>XcodebuildTestExplorerToggle<CR>', 'Xcode: toggle test [E]xplorer')
+  map('<leader>xl', '<cmd>XcodebuildToggleLogs<CR>', 'Xcode: toggle build [L]ogs')
+  map('<leader>xc', '<cmd>XcodebuildToggleCodeCoverage<CR>', 'Xcode: toggle [C]ode coverage marks')
+  map('<leader>xC', '<cmd>XcodebuildShowCodeCoverageReport<CR>', 'Xcode: [C]overage report')
+  map('<leader>xd', '<cmd>XcodebuildSelectDevice<CR>', 'Xcode: select [D]evice')
+  map('<leader>xf', '<cmd>XcodebuildProjectManager<CR>', 'Xcode: project [F]ile manager')
+  map('<leader>xa', '<cmd>XcodebuildCodeActions<CR>', 'Xcode: code [A]ctions')
+  map('<leader>xo', '<cmd>XcodebuildOpenInXcode<CR>', 'Xcode: [O]pen this file in Xcode')
+
+  -- [[ Debugger ]]
+  -- Xcode 16 and later ship `lldb-dap`, which the integration finds on its own
+  -- -- the codelldb download the plugin's docs describe is only needed below
+  -- that. The panes, the listeners, and the F-key stepping are the shared
+  -- `ensure_debugger()`; what follows is only the Swift-specific half.
+  --
+  -- The Swift debugger's own setup shells out to `xcodebuild -version` -- that's
+  -- how it decides which lldb-dap flavour to register -- which measured 50-170ms
+  -- depending on how warm Xcode is: the bulk of this whole section, otherwise
+  -- paid on every launch including all the ones nowhere near a Swift file. So
+  -- it's deferred to the first moment it can matter: opening a Swift buffer, or
+  -- reaching for a debug key.
+  local debugger_ready = false
+  local function debugger()
+    local integration = require 'xcodebuild.integrations.dap'
+    if not debugger_ready then
+      ensure_debugger()
+      integration.setup()
+      debugger_ready = true
+    end
+    return integration
+  end
+
+  -- Deliberately not `once = true`: a `once` autocmd is consumed even when its
+  -- callback throws, so one transient failure would kill the trigger for the
+  -- rest of the session AND turn opening any Swift file into a hard `:edit`
+  -- error. `debugger_ready` already makes repeat calls a boolean check, and the
+  -- pcall downgrades a broken setup to a warning you can act on.
+  --
+  -- `.swiftinterface` is excluded on purpose. SECTION 5's goto-definition
+  -- fallback gives those generated stubs filetype `swift`, so without this a
+  -- `gd` into a stdlib symbol would pay the whole blocking setup mid-keypress,
+  -- in a repo that may well have no Xcode project at all.
+  vim.api.nvim_create_autocmd('FileType', {
+    group = vim.api.nvim_create_augroup('xcode-debugger', { clear = true }),
+    pattern = 'swift',
+    callback = function(event)
+      if vim.api.nvim_buf_get_name(event.buf):match '%.swiftinterface$' then return end
+
+      local ok, err = pcall(debugger)
+      if not ok then
+        vim.notify('Swift debugger setup failed: ' .. tostring(err), vim.log.levels.WARN)
+        return
+      end
+
+      -- Restoring saved breakpoints is the debugger's own `BufReadPost` hook,
+      -- registered by the setup we just deferred -- and Vim does not run
+      -- autocmds added during the dispatch that added them. So the very first
+      -- Swift file of each session would come up bare, and worse: the next
+      -- breakpoint toggle rewrites the whole file with what's in memory, which
+      -- would delete that file's saved breakpoints from disk. Load them here.
+      require('xcodebuild.integrations.dap').load_breakpoints(event.buf)
+    end,
+  })
+
+  ---@param action string name of a function on `xcodebuild.integrations.dap`
+  local function debug_action(action)
+    return function() debugger()[action]() end
+  end
+
+  map('<leader>dd', debug_action 'build_and_debug', '[D]ebug: build & debug')
+  map('<leader>dr', debug_action 'debug_without_build', '[D]ebug: [R]un without building')
+  map('<leader>dt', debug_action 'debug_tests', '[D]ebug: [T]ests')
+  map('<leader>dT', debug_action 'debug_class_tests', '[D]ebug: current [T]est class')
+  map('<leader>db', debug_action 'toggle_breakpoint', '[D]ebug: toggle [B]reakpoint')
+  map('<leader>dB', debug_action 'toggle_message_breakpoint', '[D]ebug: toggle message [B]reakpoint')
+  map('<leader>dx', debug_action 'terminate_session', '[D]ebug: terminate session')
+
+  -- [[ SwiftLint ]]
+  -- The only linter in this config, hence the deliberately Swift-shaped setup:
+  -- to lint another language, add a `linters_by_ft` row and its own autocmd.
+  --
+  -- The linter is named explicitly rather than resolved from `linters_by_ft`.
+  -- `try_lint()` with no argument looks the linter up by the buffer's filetype,
+  -- and on `BufReadPost` this autocmd runs BEFORE `filetypedetect` -- filetype
+  -- is still empty, so the lookup finds nothing and lint-on-open silently does
+  -- nothing. `linters_by_ft` is still set, for `:lua require('lint').try_lint()`
+  -- and for anything else that reads it.
+  --
+  -- The executable check keeps the first launch quiet while Mason is still
+  -- fetching swiftlint, instead of erroring on every write until it lands.
+  require('lint').linters_by_ft = { swift = { 'swiftlint' } }
+  vim.api.nvim_create_autocmd({ 'BufWritePost', 'BufReadPost', 'InsertLeave' }, {
+    group = vim.api.nvim_create_augroup('swift-lint', { clear = true }),
+    pattern = '*.swift', -- deliberately excludes the read-only `.swiftinterface` stubs SECTION 5 opens
+    callback = function()
+      if vim.fn.executable 'swiftlint' == 1 then require('lint').try_lint 'swiftlint' end
+    end,
+  })
+  map('<leader>xL', function() require('lint').try_lint 'swiftlint' end, 'Xcode: run Swift[L]int now')
+end
+
+-- ============================================================
+-- SECTION 23: FLUTTER
+-- flutter-tools.nvim: dartls, devices, hot reload, widget outline, debugger
+-- ============================================================
+do
+  -- flutter-tools owns `dartls` itself, which is why Dart is absent from
+  -- SECTION 6's `servers` table -- configuring it in both places would start two
+  -- clients. Its picker UI is `vim.ui.select`, already routed through Telescope
+  -- by SECTION 5, so the `dressing.nvim` its README suggests isn't needed here.
+  vim.pack.add { gh 'nvim-flutter/flutter-tools.nvim' } -- plenary, its other dep, comes with telescope
+  -- flutter-tools registers its Dart adapter during setup, so dap has to exist
+  -- first -- but "first" means before the adapter is USED, not before the editor
+  -- finishes starting. Doing it here cost ~8.5ms of every launch on every
+  -- platform, Dart project or not, which is most of this section's startup bill
+  -- and exactly what SECTION 22 goes to lengths to avoid. Deferred to the first
+  -- Dart buffer instead, which is the earliest point Flutter debugging can
+  -- matter. pcall'd because a failure must not take SECTION 24's keymaps down.
+  vim.api.nvim_create_autocmd('FileType', {
+    group = vim.api.nvim_create_augroup('flutter-debugger', { clear = true }),
+    pattern = 'dart',
+    callback = function()
+      local ok, err = pcall(ensure_debugger)
+      if not ok then vim.notify('Debugger setup failed, Flutter debugging disabled: ' .. tostring(err), vim.log.levels.WARN) end
+    end,
+  })
+
+  -- Finding the SDK. Left alone, flutter-tools resolves whatever `flutter` is on
+  -- PATH -- but under a version manager that's a shim, not the SDK, and the
+  -- analysis server lives inside the SDK. `asdf where flutter` resolves the shim
+  -- to the real install for the *current directory*, which keeps per-project
+  -- pinning (a `.tool-versions` next to `pubspec.yaml`) working. It fails loudly
+  -- when no version is pinned at all -- see `<leader>m?` in SECTION 24, which
+  -- checks exactly that.
+  local lookup_cmd = vim.fn.executable 'asdf' == 1 and 'asdf where flutter' or nil
+
+  require('flutter-tools').setup {
+    flutter_lookup_cmd = lookup_cmd,
+    ui = { border = 'rounded' },
+    -- `root_patterns` is left at its default on purpose. It reads like the order
+    -- ought to matter in a monorepo -- the repo's `.git` outranking the app's
+    -- own `pubspec.yaml` -- but flutter-tools resolves the nearest DIRECTORY
+    -- containing any pattern, not the first pattern in the list, so reordering
+    -- changes nothing. Being in the right directory is what actually matters,
+    -- and that's SECTION 24's `enter`.
+    -- The widget guides are the reason to use this over a bare dartls: they draw
+    -- the tree structure of a nested build() in the gutter, which is most of
+    -- what reading Flutter code is.
+    widget_guides = { enabled = true },
+    closing_tags = { enabled = true, prefix = '// ' },
+    lsp = {
+      -- Deliberately not flutter-tools' own `color.enabled`: on 0.12 it warns at
+      -- startup that plugin-managed document colors are deprecated in favour of
+      -- `vim.lsp.document_color`, which the autocommand below turns on instead.
+      settings = {
+        showTodos = false, -- todo-comments.nvim (SECTION 4) already highlights these
+        renameFilesWithClasses = 'prompt',
+        updateImportsOnRename = true,
+      },
+    },
+    debugger = {
+      enabled = true,
+      -- No `register_configurations`. flutter-tools populates
+      -- `dap.configurations.dart` itself just before invoking that hook, so the
+      -- usual snippet (reset the table, then `dap.ext.vscode.load_launchjs()`)
+      -- deletes the configuration it was about to run and every launch dies
+      -- with "No launch configuration for DAP found". `load_launchjs` is also
+      -- deprecated now: nvim-dap reads `.vscode/launch.json` on demand.
+    },
+  }
+
+  -- Inline swatches next to `Color(0xFF...)` and `Colors.blue`, via Neovim's own
+  -- document-color support rather than the plugin's deprecated version of it.
+  vim.api.nvim_create_autocmd('LspAttach', {
+    group = vim.api.nvim_create_augroup('dart-document-color', { clear = true }),
+    callback = function(event)
+      local client = vim.lsp.get_client_by_id(event.data.client_id)
+      if client and client.name == 'dartls' and client:supports_method 'textDocument/documentColor' then
+        -- The second argument is a FILTER table, not a buffer number -- passing
+        -- the bufnr bare throws "expected table, got number" on every attach.
+        vim.lsp.document_color.enable(true, { bufnr = event.buf }, { style = 'background' })
+      end
+    end,
+  })
+end
+
+-- ============================================================
+-- SECTION 24: MOBILE LANE -- ONE SET OF VERBS FOR XCODE / FLUTTER / EXPO
+-- <leader>m* dispatches to whichever stack the current project is
+-- ============================================================
+do
+  -- Three mobile stacks, three completely different vocabularies:
+  -- `:XcodebuildBuildRun`, `:FlutterRun`, `npx expo start`. This section is one
+  -- set of verbs over all of them -- `<leader>mr` is "run my app" whichever kind
+  -- of project you're sitting in -- so the muscle memory is per-action, not
+  -- per-stack. Each stack's own commands stay available underneath; this only
+  -- adds the shortest path through them.
+  --
+  -- Two rules learned the hard way from the Xcode lane:
+  --   * `<leader>mr` configures first if the project isn't configured yet,
+  --     rather than telling you to go run setup and try again.
+  --   * `<leader>m?` exists at all. Every one of these stacks fails in ways the
+  --     editor can't fix but CAN name (no SDK version pinned, no scheme chosen,
+  --     no node_modules), and guessing from a red error is the worst part of
+  --     mobile tooling.
+
+  ---Opens a terminal in a split running `cmd` from `dir`, the way `<D-r>` does.
+  ---
+  ---`magic = { file = false }` on both commands is load-bearing, not tidiness.
+  ---Ex commands expand `%` to the current file name and `#` to the alternate
+  ---one, and that expansion happens AFTER any `shellescape` we did -- so a
+  ---project path or project name containing `%` splices the current buffer's
+  ---name into the middle of an already-quoted shell argument. With a file open
+  ---whose name contains a quote and a semicolon, that is arbitrary command
+  ---execution; without one it is merely a corrupted command. Turning the magic
+  ---off makes both strings literal.
+  ---@param cmd string
+  ---@param dir string|nil defaults to the cwd
+  local function run_in_terminal(cmd, dir)
+    vim.cmd.split()
+    if dir then vim.cmd { cmd = 'lcd', args = { dir }, magic = { file = false } } end
+    vim.cmd { cmd = 'terminal', args = { cmd }, magic = { file = false } }
+    vim.cmd.startinsert()
+  end
+
+  ---@return string|nil dir the nearest ancestor of the cwd containing `marker`
+  local function find_up(marker)
+    local found = vim.fs.find(marker, { upward = true, path = vim.fn.getcwd(), limit = 1 })[1]
+    return found and vim.fs.dirname(found) or nil
+  end
+
+  ---Which kind of mobile project are we in?
+  ---
+  ---The DEEPEST marker wins, not a fixed stack order. An `ios/` folder with an
+  ---xcodeproj inside an Expo app is the normal case and Expo has to win there,
+  ---but a fixed "Expo beats Xcode" rule gets the mirror case wrong: a native
+  ---iOS app sitting in a JS monorepo would be dragged to the monorepo root by
+  ---any `package.json` anywhere above it. Nearest-marker-wins handles both, and
+  ---is also just what you mean by "this project".
+  ---@return string|nil stack, string|nil root
+  local function detect()
+    ---@type {stack: string, root: string, depth: integer}|nil
+    local best
+
+    ---Keeps `marker` only if it's deeper than whatever matched before.
+    local function consider(stack, root)
+      if not root then return end
+      local depth = select(2, root:gsub('/', ''))
+      if not best or depth > best.depth then best = { stack = stack, root = root, depth = depth } end
+    end
+
+    consider('flutter', find_up 'pubspec.yaml')
+
+    local package_json = find_up 'package.json'
+    if package_json then
+      -- Unreadable, a directory, or nonexistent-by-the-time-we-look: a manifest
+      -- we can't read is a manifest that doesn't identify anything, not a
+      -- reason for every mobile key to throw.
+      local ok, lines = pcall(vim.fn.readfile, vim.fs.joinpath(package_json, 'package.json'))
+      local manifest = ok and table.concat(lines, '\n') or ''
+      -- `expo` as a dependency is the reliable marker; `app.json` alone is not,
+      -- plenty of non-Expo projects have one.
+      if manifest:match '"expo"%s*:' then
+        consider('expo', package_json)
+      elseif manifest:match '"react%-native"%s*:' then
+        consider('react-native', package_json)
+      end
+    end
+
+    -- Every Xcode verb needs SECTION 22, which only loads on macOS. Detecting a
+    -- stack we can't act on would just move the failure from "no mobile project
+    -- here" to E492 on a missing command.
+    if is_mac then
+      consider('xcode', find_up 'Package.swift')
+      -- `.xcodeproj`/`.xcworkspace` are directories, so `vim.fs.find`'s
+      -- file-name matching doesn't see them the way it sees the manifests --
+      -- scan each ancestor's entries instead, so opening nvim in a subfolder of
+      -- an app still finds it, matching what SECTION 22's own settings lookup
+      -- does. Read the directory rather than globbing a path built by
+      -- concatenation: `vim.fn.glob` would treat `[`, `*` or `?` in a real
+      -- folder name as pattern syntax and quietly find nothing.
+      for dir in vim.fs.parents(vim.fs.joinpath(vim.fn.getcwd(), 'x')) do
+        for entry in vim.fs.dir(dir) do
+          if entry:match '%.xcodeproj$' or entry:match '%.xcworkspace$' then
+            consider('xcode', dir)
+            break
+          end
+        end
+        if best and best.stack == 'xcode' then break end
+      end
+    end
+
+    if not best then return nil, nil end
+    return best.stack, best.root
+  end
+
+  -- [[ Monorepo: looking DOWNWARD ]]
+  -- Walking up answers "which project am I in", which is the wrong question at
+  -- a monorepo root -- there the apps are below you, and `<leader>mr` from the
+  -- top would otherwise just say "no mobile project here" and make you `:cd`.
+  --
+  -- Only consulted when the upward walk found nothing, so the common case never
+  -- pays for it.
+  local JUNK = { 'node_modules', '.git', 'build', 'Pods', '.dart_tool', 'DerivedData', 'dist', '.next', 'vendor', '.venv', 'Carthage' }
+  local SEARCH_DEPTH = 4 -- same bound `:XcodebuildSetup` uses for its own project search
+
+  ---@return {stack: string, root: string}[]
+  local function find_projects_below()
+    local cwd = vim.fn.getcwd()
+    local command
+    if vim.fn.executable 'fd' == 1 then
+      command = { 'fd', '--hidden', '--no-ignore', '--max-depth', tostring(SEARCH_DEPTH), '--absolute-path' }
+      for _, dir in ipairs(JUNK) do
+        vim.list_extend(command, { '--exclude', dir })
+      end
+      vim.list_extend(command, { '^(pubspec\\.yaml|package\\.json|Package\\.swift)$|\\.(xcodeproj|xcworkspace)$', cwd })
+    else
+      command = { 'find', cwd, '-maxdepth', tostring(SEARCH_DEPTH) }
+      for _, dir in ipairs(JUNK) do
+        vim.list_extend(command, { '-name', dir, '-prune', '-o' })
+      end
+      vim.list_extend(command, { '(', '-name', 'pubspec.yaml', '-o', '-name', 'package.json', '-o', '-name', 'Package.swift', '-o', '-name', '*.xcodeproj', '-o', '-name', '*.xcworkspace', ')', '-print' })
+    end
+
+    local found, xcode_roots = {}, {}
+    for _, path in ipairs(vim.fn.systemlist(command)) do
+      -- `fd` terminates directory results with a slash, and `.xcodeproj` /
+      -- `.xcworkspace` (and, occasionally, something named `package.json`) ARE
+      -- directories. Left on, `basename` comes back empty and `dirname` returns
+      -- the match itself instead of its parent, so every such hit is misread.
+      path = path:gsub('/+$', '')
+      local dir, name = vim.fs.dirname(path), vim.fs.basename(path)
+      -- `or` on every arm, not just some: `fd` and `find` return a directory's
+      -- entries in different orders, so a dir holding both a pubspec.yaml and an
+      -- expo package.json would resolve to a different stack depending on which
+      -- tool is installed. First marker seen wins, and the scan is sorted below,
+      -- so the answer is at least stable per machine.
+      if name == 'pubspec.yaml' then
+        found[dir] = found[dir] or 'flutter'
+      elseif name == 'Package.swift' then
+        -- Same `is_mac` gate `detect()` applies: a stack we cannot act on is
+        -- worse than no stack, because SECTION 22 never loaded to serve it.
+        if is_mac then found[dir] = found[dir] or 'xcode' end
+      elseif name == 'package.json' then
+        local ok, lines = pcall(vim.fn.readfile, path)
+        local manifest = ok and table.concat(lines, '\n') or ''
+        if manifest:match '"expo"%s*:' then
+          found[dir] = found[dir] or 'expo'
+        elseif manifest:match '"react%-native"%s*:' then
+          found[dir] = found[dir] or 'react-native'
+        end
+      else
+        table.insert(xcode_roots, dir)
+      end
+    end
+
+    -- Flutter and React Native both generate `ios/` and `macos/` folders with a
+    -- real xcodeproj inside. Offering those as separate projects would bury the
+    -- one project the repo actually has under three spellings of it.
+    for _, dir in ipairs(xcode_roots) do
+      local generated = false
+      for owner, stack in pairs(found) do
+        if (stack == 'flutter' or stack == 'expo' or stack == 'react-native') and vim.startswith(dir, owner .. '/') then generated = true end
+      end
+      if not generated and is_mac then found[dir] = found[dir] or 'xcode' end
+    end
+
+    local projects = {}
+    for root, stack in pairs(found) do
+      table.insert(projects, { stack = stack, root = root })
+    end
+    table.sort(projects, function(a, b) return a.root < b.root end)
+    return projects
+  end
+
+  -- One pick per directory, remembered for the session: a monorepo with several
+  -- apps shouldn't ask again on every keypress.
+  local chosen_below = {}
+
+  ---Every one of these tools resolves its own project by walking UP from where
+  ---Neovim is sitting -- xcodebuild.nvim keys its whole settings file off the
+  ---cwd, flutter-tools walks up from the current buffer, and `npx expo` just
+  ---uses the process cwd. So having picked a project two directories down, we
+  ---have to actually go there, or every tool re-derives a different answer and
+  ---you get "No pubspec.yaml file found" from a repo that plainly has one.
+  ---
+  ---`tcd` rather than `cd`: the move is scoped to this tab, so a second tab
+  ---sitting in another app of the same monorepo keeps its own project.
+  ---@param root string
+  ---@return boolean entered false if the directory is gone
+  local function enter(root)
+    if vim.fn.getcwd() == root then return true end
+
+    -- `magic = { file = false }` for the same reason `run_in_terminal` needs it,
+    -- and it is NOT optional here: `:tcd` expands its argument, so a backtick in
+    -- a project path runs as a shell command and `%`/`#` splice in buffer names.
+    -- Verified: a directory named with backticks executed the command and then
+    -- silently left the cwd unchanged, so the failure isn't even loud.
+    local ok = pcall(vim.cmd, { cmd = 'tcd', args = { root }, magic = { file = false } })
+    if not ok then
+      vim.notify(('%s is gone.'):format(vim.fn.fnamemodify(root, ':~')), vim.log.levels.WARN)
+      return false
+    end
+
+    vim.notify(('Working in %s'):format(vim.fn.fnamemodify(root, ':~')), vim.log.levels.INFO)
+    return true
+  end
+
+  ---Resolves the project to act on, asking when a monorepo offers a choice.
+  ---@param on_project fun(stack: string, root: string)
+  local function with_project(on_project)
+    local stack, root = detect()
+    if stack then
+      if enter(root) then on_project(stack, root) end
+      return
+    end
+
+    local cwd = vim.fn.getcwd()
+    local remembered = chosen_below[cwd]
+    if remembered then
+      -- A remembered project can be deleted underneath us -- a branch switch, a
+      -- `flutter clean`, a moved folder. Without dropping the memo on that, every
+      -- mobile key stays wedged on the dead path until `:MobileForget`, and any
+      -- new project below is unreachable.
+      if enter(remembered.root) then return on_project(remembered.stack, remembered.root) end
+      chosen_below[cwd] = nil
+      vim.notify('Forgot it -- press again to pick another.', vim.log.levels.INFO)
+      return
+    end
+
+    local xcode_note = is_mac and ', and an .xcodeproj/.xcworkspace/Package.swift' or ''
+    local projects = find_projects_below()
+    if #projects == 0 then
+      vim.notify(
+        ('No mobile project here or in the %d levels below. Looked for pubspec.yaml, an "expo" dependency in package.json%s, from %s.'):format(SEARCH_DEPTH, xcode_note, cwd),
+        vim.log.levels.WARN
+      )
+      return
+    end
+
+    local function use(project)
+      -- Keyed by the directory the question was asked FROM, which `enter` is
+      -- about to change -- so capture it before moving, or the answer gets
+      -- filed under the project's own path and the monorepo root asks again.
+      -- Written only once the move succeeded: the picker is async, so the root
+      -- can vanish while it's open, and remembering a root we already know is
+      -- dead burns the next press re-discovering that.
+      if not enter(project.root) then return end
+      chosen_below[cwd] = project
+      on_project(project.stack, project.root)
+    end
+
+    if #projects == 1 then return use(projects[1]) end
+
+    vim.ui.select(projects, {
+      prompt = 'Which project?',
+      format_item = function(project) return ('%-13s %s'):format(project.stack, vim.fs.relpath(cwd, project.root) or project.root) end,
+    }, function(project)
+      if project then use(project) end
+    end)
+  end
+
+  -- Flutter's chosen device, per project root. See the APP_STARTED hook below.
+  local flutter_device = {}
+
+  -- Matched by PREFIX, because `flutter devices` reports the platform
+  -- arch-suffixed: a Mac is `darwin-arm64` (or `darwin-x64`), an Android device
+  -- is `android-arm64`/`android-x86`. An exact-match table looks right and
+  -- matches almost nothing -- and `macos` isn't a platform at all, it's the
+  -- device ID in the previous column. Anything unmatched falls to the picker.
+  local FLUTTER_BUILD_TARGET = {
+    { '^ios', 'ios' },
+    { '^android', 'apk' },
+    { '^darwin', 'macos' },
+    { '^web', 'web' },
+    { '^linux', 'linux' },
+    { '^windows', 'windows' },
+  }
+
+  ---@param platform string|nil as reported by `flutter devices`
+  ---@return string|nil target for `flutter build <target>`
+  local function build_target_for(platform)
+    if type(platform) ~= 'string' then return nil end
+    for _, row in ipairs(FLUTTER_BUILD_TARGET) do
+      if platform:match(row[1]) then return row[2] end
+    end
+  end
+
+  vim.api.nvim_create_user_command('MobileForget', function()
+    chosen_below, flutter_device = {}, {}
+    vim.notify('Forgot the remembered project and device for every directory.', vim.log.levels.INFO)
+  end, { desc = 'Re-ask which project and device the mobile lane should use' })
+
+  ---Runs `action` for the resolved project, or explains why it can't.
+  ---@param verb string the key's name, for the error message
+  ---@param actions table<string, fun(root: string)>
+  local function dispatch(verb, actions)
+    with_project(function(stack, root)
+      local action = actions[stack]
+      if not action then
+        vim.notify(('No "%s" for a %s project.'):format(verb, stack), vim.log.levels.WARN)
+        return
+      end
+      action(root)
+    end)
+  end
+
+  -- [[ Which device? ]]
+  -- Xcode saves a chosen device in its project settings; Flutter has no such
+  -- notion, so a bare `flutter run` with a phone AND a Mac AND Chrome attached
+  -- exits(1) with "More than one device connected". flutter-tools does recover
+  -- -- it catches that string and offers a picker -- but you eat a red error
+  -- first, and nothing is remembered, so the next run does it again.
+  --
+  -- So: ask on the first run of a project, then reuse the answer. `<leader>md`
+  -- re-picks (it runs on select, which lands back here and overwrites this).
+  -- Learned from the plugin's own APP_STARTED event rather than from the picker,
+  -- so a device chosen through any other route is remembered too -- including a
+  -- plain `:FlutterRun` fired from a subdirectory, which is why the key is the
+  -- project root rather than the cwd. Keying on cwd only agrees with the reader
+  -- when you happened to be standing in the root, i.e. it fails in exactly the
+  -- "any other route" case the paragraph above promises.
+  vim.api.nvim_create_autocmd('User', {
+    group = vim.api.nvim_create_augroup('mobile-flutter-device', { clear = true }),
+    pattern = 'FlutterToolsAppStarted',
+    callback = function()
+      local device = require('flutter-tools.commands').current_device()
+      if not (device and device.id) then return end
+      local root = select(2, detect())
+      if not root then return end
+
+      -- A reuse run goes through `FlutterRun -d <id>`, and flutter-tools parses
+      -- that back into literally `{ id = ... }` -- no name, no platform. Blindly
+      -- storing it would erase what the picker taught us on the first run, so
+      -- `<leader>mb` would lose its target and `<leader>mr` would start saying
+      -- "Running on 00008140-..." instead of the device's name.
+      local known = flutter_device[root]
+      if known and known.id == device.id then device = vim.tbl_extend('keep', device, known) end
+      flutter_device[root] = device
+    end,
+  })
+
+  -- [[ Run ]]
+  -- The Xcode half is where the auto-configure lives. xcodebuild.nvim's own
+  -- `build_and_run` refuses with "run XcodebuildSetup first" when the project
+  -- has no saved scheme/device, so this runs setup and picks the action back up
+  -- once it's actually finished.
+  --
+  -- Finishing is detected by POLLING `is_configured()`, not by waiting on
+  -- `XcodebuildProjectSettingsUpdated`. That event looked like the right hook
+  -- and isn't: every emitter sits inside `select_testplan`, while the fields
+  -- `is_app_configured()` requires -- bundleId, appPath, productName -- are
+  -- written afterwards by `update_settings`, which the wizard calls with no
+  -- callback and which emits nothing at all. So for an app project the last
+  -- event always lands while `is_configured()` is still false, and an
+  -- event-driven version walks you through the whole wizard and then silently
+  -- does nothing. (SPM projects happen to escape it, which is what made this
+  -- look like it worked.)
+  local setup_poll
+
+  ---`is_configured()` is a global boolean with no notion of WHICH project it
+  ---describes, and the wizard's project picker overwrites only the project
+  ---fields -- scheme, destination, bundleId and friends survive from whatever
+  ---was configured before. So after switching projects it happily reports
+  ---"configured" using the previous app's scheme, and a build fires against a
+  ---mismatched setup. Tie the answer to the root we were actually dispatched
+  ---for, which also stops an abandoned wizard's poll from being satisfied by an
+  ---unrelated project's configuration completing later.
+  ---@param root string
+  ---@return boolean
+  local function configured_for(root)
+    local config = require 'xcodebuild.project.config'
+    if not config.is_configured() then return false end
+    local owner = config.settings.projectFile or config.settings.workingDirectory
+    -- No owner recorded at all: trust `is_configured` rather than deadlock.
+    if not owner then return true end
+    return vim.startswith(vim.fs.normalize(owner), vim.fs.normalize(root))
+  end
+
+  ---Runs `action` now if the project is ready, otherwise sets it up first.
+  ---@param root string the project the action belongs to
+  ---@param action fun()
+  local function xcode_after_setup(root, action)
+    -- Guarded for the same reason the poll body is: reading the project's saved
+    -- state can raise on a corrupt `settings.json`, and an unguarded read here
+    -- takes the keypress down before any of the recovery below can run.
+    local readable, ready = pcall(configured_for, root)
+    if not readable then
+      vim.notify(('Could not read this project\'s Xcode settings: %s'):format(ready), vim.log.levels.ERROR)
+      return
+    end
+    if ready then return action() end
+
+    -- Re-pressing mid-wizard swaps the queued action; it must NOT start a second
+    -- wizard on top of the live one, or both chains run their own settings
+    -- update and race. Only the first press opens it.
+    local already_pending = setup_poll ~= nil
+    if setup_poll then
+      setup_poll:stop()
+      setup_poll:close()
+    end
+    vim.notify(
+      already_pending and 'Setup already open -- this action is queued instead.' or 'No scheme or device chosen yet -- setting up first.',
+      vim.log.levels.INFO
+    )
+    setup_poll = assert(vim.uv.new_timer())
+
+    local INTERVAL, DEADLINE = 400, 5 * 60 * 1000
+    -- Wall clock, not tick-counting. libuv coalesces repeats it couldn't
+    -- deliver, so a loop blocked by a synchronous shell-out advances a tick
+    -- counter by roughly nothing -- measured 5 ticks across 6s of real time.
+    -- The deadline exists to bound how long a stale trigger can linger, and a
+    -- counter that stops advancing when the editor is busy bounds nothing.
+    local started = vim.uv.now()
+    local timer = setup_poll
+    timer:start(
+      INTERVAL,
+      INTERVAL,
+      vim.schedule_wrap(function()
+        if timer:is_closing() then return end
+
+        -- The whole body is guarded, and cleanup runs on BOTH paths. Unguarded,
+        -- one throw skips the stop/close and the timer spins for the rest of the
+        -- session at 400ms, one error per tick -- and because the same call
+        -- throws on the next keypress too, the replace-and-close branch above
+        -- can never be reached again. A `settings.json` containing `null` is
+        -- enough to trigger it. Terminal cleanup belongs on the error path.
+        local ok, done = pcall(configured_for, root)
+        local expired = vim.uv.now() - started >= DEADLINE
+        if ok and not done and not expired then return end
+
+        timer:stop()
+        timer:close()
+        if setup_poll == timer then setup_poll = nil end
+
+        if ok and done then
+          action()
+        elseif not ok then
+          vim.notify(('Stopped waiting for setup: %s'):format(done), vim.log.levels.ERROR)
+        else
+          -- Silence here reads as "it's still coming" forever.
+          vim.notify('Setup did not finish within 5 minutes -- press again when you are ready.', vim.log.levels.WARN)
+        end
+      end)
+    )
+
+    if not already_pending then require('xcodebuild.actions').configure_project() end
+  end
+
+  -- flutter-tools holds off registering its `:Flutter*` commands until you enter
+  -- a `*.dart` buffer or a `pubspec.yaml`. So in a Flutter project where you
+  -- haven't opened one yet -- which is exactly where you'd reach for "run my
+  -- app" -- `:FlutterRun` does not exist and the key dies with E492. Firing its
+  -- own trigger is cheaper and less surprising than opening a buffer behind
+  -- your back, and it's a no-op once the commands are up.
+  ---@param command string
+  ---@return fun()
+  local function flutter(command)
+    return function()
+      -- BEFORE the nudge below, not after, and not left to the `FileType dart`
+      -- hook in SECTION 23. flutter-tools registers its Dart adapter inside the
+      -- `start()` that the nudge triggers, and it only does so if nvim-dap is
+      -- already loadable -- otherwise it silently falls back to the plain job
+      -- runner and every `<leader>mr` runs UNDEBUGGED, notifying "debugger
+      -- runner was request but nvim-dap is not installed!". The `FileType dart`
+      -- hook doesn't cover this path at all: the nudge is a `BufEnter` on
+      -- `pubspec.yaml`, which never produces a dart filetype, so pressing
+      -- `<leader>mr` without a .dart buffer open missed it entirely.
+      -- Reported, not swallowed. Its two sibling call sites both notify on
+      -- failure, and a half-installed dap (require succeeds, `dapui.setup`
+      -- throws) is invisible otherwise: flutter-tools sees dap and debugs
+      -- happily, but no panes are wired and nothing ever says why.
+      local debugger_ok, debugger_err = pcall(ensure_debugger)
+      if not debugger_ok then vim.notify('Debugger setup failed, running undebugged: ' .. tostring(debugger_err), vim.log.levels.WARN) end
+
+      if vim.fn.exists ':FlutterRun' == 0 then vim.api.nvim_exec_autocmds('BufEnter', { pattern = 'pubspec.yaml' }) end
+
+      -- With no Flutter on PATH at all, flutter-tools hands its resolver a nil
+      -- path and dies deep in `executable.lua` with a raw E5108 traceback that
+      -- names nothing useful. Catch it here and point at the key that explains
+      -- it. The narrower case of an SDK that IS on PATH but doesn't resolve (an
+      -- asdf shim with no pinned version) fails asynchronously inside
+      -- flutter-tools instead, so it can't be caught from this side -- that one
+      -- surfaces as flutter-tools' own message, and `<leader>m?` diagnoses it.
+      if vim.fn.executable 'flutter' == 0 then
+        vim.notify('flutter is not on PATH. <leader>m? explains what to install.', vim.log.levels.ERROR)
+        return
+      end
+
+      vim.cmd(command)
+    end
+  end
+
+  ---Runs the app, asking which device the first time. Defined here rather than
+  ---next to the device memory above because it needs `flutter` -- Lua locals are
+  ---only in scope after their declaration, and calling it earlier resolves
+  ---`flutter` as a nil global instead.
+  ---@param root string
+  local function flutter_run(root)
+    local device = flutter_device[root]
+    if not device then
+      -- `:FlutterDevices` runs the app on whatever you pick, so this IS the run.
+      return flutter 'FlutterDevices'()
+    end
+    -- Name it every time. "Why did it pick that one?" is only a question when
+    -- the editor stays quiet about what it chose.
+    vim.notify(('Running on %s'):format(device.name or device.id), vim.log.levels.INFO)
+    -- Deliberately NOT shellescaped. There is no shell here: flutter-tools does
+    -- `vim.split(args, ' ')` and spawns via libuv, so quotes added for a shell
+    -- that never runs end up inside the device id itself and match no device.
+    flutter(('FlutterRun -d %s'):format(device.id))()
+  end
+
+  local function map(keys, action, desc) vim.keymap.set('n', keys, action, { desc = desc }) end
+
+  map('<leader>mr', function()
+    dispatch('run', {
+      xcode = function(root) xcode_after_setup(root, function() require('xcodebuild.actions').build_and_run() end) end,
+      flutter = flutter_run,
+      expo = function(root) run_in_terminal('npx expo start', root) end,
+      ['react-native'] = function(root) run_in_terminal('npx react-native start', root) end,
+    })
+  end, 'Mobile: [R]un this app')
+
+  -- Compile, don't launch. Xcode has a real build-only action; Flutter needs a
+  -- target platform, since `flutter build` alone isn't a command -- take it from
+  -- the device you already picked and only ask when there's nothing to infer
+  -- from. Expo's equivalent is `export`, which bundles without starting Metro.
+  map('<leader>mb', function()
+    dispatch('build', {
+      xcode = function(root) xcode_after_setup(root, function() require('xcodebuild.actions').build() end) end,
+      flutter = function(root)
+        local remembered = flutter_device[root]
+        local target = remembered and build_target_for(remembered.platform)
+        if target then return run_in_terminal(('flutter build %s'):format(target), root) end
+
+        vim.ui.select({ 'ios', 'apk', 'appbundle', 'macos', 'web' }, { prompt = 'flutter build' }, function(choice)
+          if choice then run_in_terminal(('flutter build %s'):format(choice), root) end
+        end)
+      end,
+      expo = function(root) run_in_terminal('npx expo export', root) end,
+    })
+  end, 'Mobile: [B]uild without launching')
+
+  map('<leader>mR', function()
+    dispatch('reload', {
+      xcode = function() vim.cmd 'XcodebuildBuildRun' end, -- no hot reload for a native build
+      flutter = flutter 'FlutterReload',
+      expo = function() vim.notify("Metro reloads on save. Press 'r' in the Metro terminal to force it.", vim.log.levels.INFO) end,
+    })
+  end, 'Mobile: hot [R]eload')
+
+  map('<leader>md', function()
+    dispatch('device picker', {
+      xcode = function() vim.cmd 'XcodebuildSelectDevice' end,
+      flutter = flutter 'FlutterDevices',
+      expo = function(root) run_in_terminal('npx expo start --ios', root) end,
+    })
+  end, 'Mobile: pick a [D]evice')
+
+  map('<leader>mt', function()
+    dispatch('test', {
+      xcode = function() vim.cmd 'XcodebuildTest' end,
+      flutter = function(root) run_in_terminal('flutter test', root) end,
+      expo = function(root) run_in_terminal('npm test', root) end,
+      ['react-native'] = function(root) run_in_terminal('npm test', root) end,
+    })
+  end, 'Mobile: run [T]ests')
+
+  map('<leader>ms', function()
+    dispatch('setup', {
+      xcode = function() vim.cmd 'XcodebuildSetup' end,
+      flutter = flutter 'FlutterDevices', -- a device is all Flutter needs chosen
+      expo = function(root) run_in_terminal('npm install', root) end,
+      ['react-native'] = function(root) run_in_terminal('npm install', root) end,
+    })
+  end, 'Mobile: [S]etup this project')
+
+  -- [[ Doctor ]]
+  -- Each stack has a real doctor; the value added here is checking the things
+  -- that sit *between* the editor and that doctor, which is where the confusing
+  -- failures actually live -- an unpinned asdf version, an unconfigured scheme,
+  -- an uninstalled node_modules. Those are printed first, then the real tool runs.
+  local function report(lines)
+    vim.notify(table.concat(lines, '\n'), vim.log.levels.INFO, { title = 'Mobile doctor' })
+  end
+
+  -- A Flutter or RN app has a native half, and opening `ios/Runner/AppDelegate.swift`
+  -- lights it up red: sourcekit-lsp attaches, but with no `buildServer.json` it
+  -- has no framework search paths, so `import Flutter` becomes "No such module
+  -- 'Flutter'" on line 3 of a file that compiles perfectly. Confirmed on
+  -- muslim_plus: 1 SourceKit error, and it is entirely phantom.
+  --
+  -- The Xcode doctor already names this, but you never reach it from here --
+  -- `<leader>m?` in a Flutter project is the Flutter doctor. So it gets checked
+  -- from this side too, where the Swift file you're staring at actually lives.
+  ---@param dir string a native shell directory (`<root>/ios`, `<root>/macos`)
+  ---@return string|nil path where THIS project's compile flags would live
+  local function compile_flags_path(dir)
+    local ok, lines = pcall(vim.fn.readfile, vim.fs.joinpath(dir, 'buildServer.json'))
+    if not ok then return nil end
+    local decoded, config = pcall(vim.json.decode, table.concat(lines, '\n'))
+    if not decoded or type(config) ~= 'table' then return nil end
+
+    -- Two storage layouts, and picking the wrong one reports a working project
+    -- as broken. `xcode-build-server config` writes kind="xcode", whose flags go
+    -- to a hashed file in the shared cache. Anything else -- `parse`, or no
+    -- `kind` key at all, which the server itself defaults to "manual" -- uses
+    -- `<dir>/.compile`. Mirrors `get_compile_file` in the server.
+    if config.kind == 'xcode' then
+      local build_root = config.build_root or dir
+      -- `md5` is BSD-only. It's reachable here because this whole check runs on
+      -- every host (a Flutter repo commits its `ios/` folder), and an
+      -- unguarded `vim.system` on a missing binary doesn't fail soft -- it
+      -- throws ENOENT out of the keymap. `native_shell_notes` gates the whole
+      -- thing on macOS now, so this is the second line of defence rather than
+      -- the only one, but the doctor is the LAST thing that should ever be the
+      -- error you have to debug.
+      local ran, result = pcall(function() return vim.system({ 'md5', '-q', '-s', build_root }):wait() end)
+      local hash = ran and vim.trim(result.stdout or '') or ''
+      if hash == '' then return nil end
+
+      -- The cache is nested one level deeper than it looks: the server keys it
+      -- by the LSP root path with every `/` turned into `-`, THEN puts the
+      -- hashed compile file inside. Flattening that away points at a path that
+      -- never exists, so every correctly-configured project reports as broken --
+      -- the exact false alarm this check was rewritten to stop producing.
+      -- Mirrors `build_initialize` + `get_compile_file` in the server.
+      return vim.fs.joinpath(
+        vim.env.HOME,
+        'Library/Caches/xcode-build-server',
+        (dir:gsub('/', '-')),
+        ('compile_file-%s-%s'):format(config.scheme or '_last', hash)
+      )
+    end
+
+    return vim.fs.joinpath(dir, '.compile')
+  end
+
+  ---@param root string
+  ---@return string[]
+  local function native_shell_notes(root)
+    local notes = {}
+    -- macOS only, and not merely because the tooling is: an `ios/` folder is
+    -- committed to every Flutter repo, so this runs on Linux too, where none of
+    -- sourcekit-lsp, xcode-build-server or Xcode exists. There is no phantom
+    -- error to warn about on a host that can't produce one, and the advice
+    -- ("brew install ...") would be wrong.
+    if not is_mac then return notes end
+
+    for _, platform in ipairs { 'ios', 'macos' } do
+      local dir = vim.fs.joinpath(root, platform)
+      if vim.uv.fs_stat(vim.fs.joinpath(dir, 'Runner.xcodeproj')) then
+        -- Both halves are required and neither implies the other.
+        -- `buildServer.json` is what makes sourcekit-lsp launch the build server
+        -- at all; the harvested flags are what that server has to answer with.
+        -- Checking only the flags would call a project healthy that sourcekit
+        -- never even talks to.
+        local flags = compile_flags_path(dir)
+        if not flags then
+          local fix = vim.fn.executable 'xcode-build-server' == 0 and 'Start with: brew install xcode-build-server'
+            or ('Run: cd %s && xcode-build-server config -workspace Runner.xcworkspace -scheme Runner'):format(platform)
+          table.insert(notes, ('! %s/ Swift shows phantom errors ("No such module \'Flutter\'"). %s'):format(platform, fix))
+        elseif vim.uv.fs_stat(flags) then
+          table.insert(notes, ('ok %s/ has compile flags'):format(platform))
+        else
+          table.insert(
+            notes,
+            ('! %s/ build server is bound but has no flags yet -- needs one CLEAN build to harvest them (see the README recipe)'):format(platform)
+          )
+        end
+      end
+    end
+    return notes
+  end
+
+  map('<leader>m?', function()
+    dispatch('doctor', {
+      flutter = function(root)
+        local notes = {}
+        if vim.fn.executable 'flutter' == 0 then
+          table.insert(notes, 'x flutter is not on PATH')
+        elseif vim.fn.executable 'asdf' == 1 and vim.system({ 'asdf', 'where', 'flutter' }, { cwd = root }):wait().code ~= 0 then
+          -- The exact failure this machine had: asdf shims exist, so `flutter`
+          -- looks installed, but nothing is pinned so every invocation errors.
+          table.insert(notes, 'x asdf has no flutter version set for this directory -- run `asdf set flutter <version>` (`asdf list flutter` to see what is installed)')
+        else
+          table.insert(notes, 'ok flutter SDK resolves')
+        end
+        vim.list_extend(notes, native_shell_notes(root))
+        report(notes)
+        run_in_terminal('flutter doctor', root)
+      end,
+      expo = function(root)
+        local notes = {}
+        table.insert(notes, vim.uv.fs_stat(vim.fs.joinpath(root, 'node_modules')) and 'ok node_modules present' or 'x node_modules missing -- <leader>ms installs them')
+        table.insert(notes, vim.fn.executable 'watchman' == 1 and 'ok watchman present' or '! watchman not installed (Metro is slower without it: brew install watchman)')
+        report(notes)
+        run_in_terminal('npx expo-doctor', root)
+      end,
+      xcode = function()
+        local config = require 'xcodebuild.project.config'
+        report {
+          config.is_configured() and ('ok configured: scheme %s, device %s'):format(config.settings.scheme or '?', config.settings.deviceName or '?') or 'x not configured yet -- <leader>ms, or just press <leader>mr and it will ask',
+          vim.fn.executable 'xcbeautify' == 1 and 'ok xcbeautify present' or '! xcbeautify missing, build logs stay raw (brew install xcbeautify)',
+          vim.fn.executable 'xcode-build-server' == 1 and 'ok xcode-build-server present' or '! xcode-build-server missing, so sourcekit-lsp will not understand an .xcodeproj (brew install xcode-build-server)',
+        }
+        vim.cmd 'checkhealth xcodebuild'
+      end,
+    })
+  end, 'Mobile: doctor (what is wrong with this project?)')
+
+  -- [[ New project ]]
+  -- The honest answer to "what about a project that doesn't exist yet": both
+  -- scaffolders are one CLI call, they just aren't ones you remember. Xcode is
+  -- absent on purpose -- there is no supported way to generate an .xcodeproj
+  -- from the command line, so that one really is "open Xcode once".
+  map('<leader>mn', function()
+    vim.ui.select({ 'Flutter app', 'Expo app (TypeScript)' }, { prompt = 'New mobile project' }, function(choice)
+      if not choice then return end
+      vim.ui.input({ prompt = 'Project name: ' }, function(name)
+        if not name or name == '' then return end
+        local command = choice:match '^Flutter' and ('flutter create %s'):format(vim.fn.shellescape(name))
+          or ('npx create-expo-app@latest %s --template blank-typescript'):format(vim.fn.shellescape(name))
+        run_in_terminal(command, vim.fn.getcwd())
+      end)
+    end)
+  end, 'Mobile: [N]ew project')
+
+  require('which-key').add {
+    { '<leader>m', group = '[M]obile' },
+    { '<leader>d', group = '[D]ebug' }, -- bound at file scope, grouped here where which-key exists
+  }
 end
 
 -- The line beneath this is called `modeline`. See `:help modeline`
