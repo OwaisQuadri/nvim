@@ -45,6 +45,8 @@ search faster; `tree-sitter-cli` is required to compile treesitter parsers
 (note: Homebrew's `tree-sitter` formula only installs the library, not the
 CLI — it's a separate package).
 
+Branch naming and other repo conventions live in [`CLAUDE.md`](CLAUDE.md).
+
 `run.sh` opens a new Ghostty window running Neovim with this repo's
 `init.lua` (`nvim -u init.lua .`) so you can try out config changes without
 touching `~/.config/nvim`. `build.sh` is still a hello-world script for testing
