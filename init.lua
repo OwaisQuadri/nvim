@@ -1653,9 +1653,8 @@ do
     -- But for many setups, the LSP (`ts_ls`) will work just fine
     ts_ls = {},
 
-    -- ESLint, for React Native / Expo and anything else JS. It reads the
-    -- project's own eslint config and its own installed eslint, so it is inert
-    -- in a repo that doesn't lint -- no config here beyond turning it on.
+    -- ESLint reads the project's own config and its own installed eslint, so it
+    -- is inert in a repo that doesn't lint. Nothing to configure here.
     eslint = {},
 
     stylua = {}, -- Used to format Lua code
@@ -2362,9 +2361,9 @@ if is_mac then
   }
 
   -- Loaded eagerly rather than gated behind "is there an .xcodeproj under the
-  -- cwd?". The three mobile sections together move startup from a ~63ms median
-  -- to ~81ms, and only because the debugger below is deferred -- leaving that
-  -- eager put it past 130ms. A cwd gate would have to re-run project detection
+  -- cwd?". The three mobile sections together move the measured floor from
+  -- ~60.5ms to ~69.6ms, and only because the debugger is deferred -- leaving it
+  -- eager put startup past 130ms. A cwd gate would have to re-run project detection
   -- on every `:cd` to stay correct, which is more moving parts than the
   -- remaining milliseconds buy back.
   --
@@ -2651,7 +2650,6 @@ do
     ---@type {stack: string, root: string, depth: integer}|nil
     local best
 
-    ---Keeps `marker` only if it's deeper than whatever matched before.
     local function consider(stack, root)
       if not root then return end
       local depth = select(2, root:gsub('/', ''))
@@ -3100,10 +3098,9 @@ do
     end
   end
 
-  ---Runs the app, asking which device the first time. Defined here rather than
-  ---next to the device memory above because it needs `flutter` -- Lua locals are
-  ---only in scope after their declaration, and calling it earlier resolves
-  ---`flutter` as a nil global instead.
+  ---Runs the app, asking which device the first time. Kept below `flutter`'s
+  ---definition: Lua locals aren't in scope before it, so calling it earlier
+  ---resolves `flutter` to a nil global.
   ---@param root string
   local function flutter_run(root)
     local device = flutter_device[root]
@@ -3197,8 +3194,8 @@ do
   -- A Flutter or RN app has a native half, and opening `ios/Runner/AppDelegate.swift`
   -- lights it up red: sourcekit-lsp attaches, but with no `buildServer.json` it
   -- has no framework search paths, so `import Flutter` becomes "No such module
-  -- 'Flutter'" on line 3 of a file that compiles perfectly. Confirmed on
-  -- muslim_plus: 1 SourceKit error, and it is entirely phantom.
+  -- 'Flutter'" on line 3 of a file that compiles perfectly -- one SourceKit
+  -- error, entirely phantom, on a real Flutter app.
   --
   -- The Xcode doctor already names this, but you never reach it from here --
   -- `<leader>m?` in a Flutter project is the Flutter doctor. So it gets checked

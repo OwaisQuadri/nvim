@@ -299,8 +299,8 @@ xcodebuild through its own build dir); and an incremental `xcodebuild` (0 compil
 commands, so `.compile` comes out empty). `<leader>m?` knows both layouts and
 tells you which step is missing rather than guessing.
 
-Afterwards sourcekit type-checks the file properly — on muslim_plus the phantom
-error was replaced by a real unused-variable warning. Re-harvest after changing
+Afterwards sourcekit type-checks the file properly — on a real app the phantom
+error was replaced by a genuine unused-variable warning. Re-harvest after changing
 dependencies. Add `ios/.compile` and `ios/buildServer.json` to the app's
 `.gitignore`; they're machine-specific. SwiftLint's warnings in these files were
 always real — only the SourceKit module errors were phantom.
