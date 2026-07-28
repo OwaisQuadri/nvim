@@ -12,6 +12,7 @@ number is just an ordinal — ids are labels, not an ordering.
 |---|---|
 | `rN` | Repo/tooling work — plugin adoption, perf, telemetry, test harness |
 | `gN` | Golf/coach work — the forced vim coach loop that is this config's headline direction |
+| `tN` | TypeScript/React-Native lane — JS/TSX editing, added by TICKET-1 |
 
 Always write an id with its description on every mention: `r11 (headless test harness)`,
 never a bare `r11`.

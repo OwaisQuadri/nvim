@@ -165,6 +165,10 @@ do
   vim.o.splitright = true
   vim.o.splitbelow = true
 
+  -- 82, not 80: prettier only wraps lines that EXCEED its default printWidth of
+  -- 80, so a ruler at 80 flags lines the formatter is happy with.
+  vim.o.colorcolumn = '82'
+
   -- Sets how neovim will display certain whitespace characters in the editor.
   --  See `:help 'list'`
   --  and `:help 'listchars'`
@@ -1113,7 +1117,7 @@ do
     end,
   })
 
-  -- [[ Goto-definition "real source" fallback (Swift + TS/JS only) ]]
+  -- [[ Goto-definition "real source" fallback (Swift only) ]]
   --
   -- sourcekit-lsp resolves system/stdlib `gd` into a generated `.swiftinterface`
   -- (declarations only, no body). ts_ls resolves node_modules packages that
@@ -1152,8 +1156,13 @@ do
     -- Is this resolved definition URI a stub we can do better than?
     local function stub_kind(path)
       if path:match '%.swiftinterface$' then return 'swift' end
-      -- Only .d.ts files that live under a node_modules package are TS stubs.
-      if path:match '%.d%.ts$' and path:match '/node_modules/' then return 'ts' end
+      -- Disabled: react-native ships .js source, not .ts, so this branch searched
+      -- for a file that isn't there and never resolved. It cost a couple of
+      -- seconds of unauthenticated GitHub round trips on every cold `gd` and
+      -- landed on the same file it would have reached anyway, so nothing is lost
+      -- by skipping it. Re-enabling is this one line, plus teaching the search to
+      -- look for `.js` -- see t2 (goto-def stub fallback) in roadmap.md.
+      -- if path:match '%.d%.ts$' and path:match '/node_modules/' then return 'ts' end
       return nil
     end
 
@@ -1301,6 +1310,11 @@ do
       end)
     end
 
+    -- DEAD CODE, kept on purpose: stub_kind() above no longer returns 'ts' (see
+    -- its comment for why), so find_package_json/repo_from_package/resolve_ts
+    -- below are unreachable. Do not remove them as unused -- they are the
+    -- starting point for t2 (goto-def stub fallback) in roadmap.md.
+    --
     -- TS/JS: walk up from the .d.ts to the owning package.json, read repository +
     -- version, resolve the GitHub repo, then find the .ts source by basename.
     local function find_package_json(start_path)
@@ -1422,6 +1436,8 @@ do
           if kind == 'swift' then
             return resolve_swift(path, fallback, origin, sym)
           else
+            -- Unreachable: stub_kind() can no longer return 'ts' (see its
+            -- comment), so kind is always 'swift' here. Kept for t2.
             return resolve_ts(path, fallback, origin, sym)
           end
         end
@@ -1896,6 +1912,22 @@ do
   local parsers =
     { 'bash', 'c', 'diff', 'html', 'lua', 'luadoc', 'markdown', 'markdown_inline', 'query', 'vim', 'vimdoc', 'swift', 'dart', 'javascript', 'typescript', 'tsx', 'json', 'yaml' }
   require('nvim-treesitter').install(parsers)
+
+  -- mini.pairs auto-closes brackets and quotes on every filetype but has no
+  -- concept of a tag, so typing `<View>` in a JSX/TSX buffer left no `</View>`
+  -- behind. nvim-ts-autotag reads the tsx/jsx tree to close a tag as you type it
+  -- and rename the pair as you edit either side. Its `>` remap is buffer-local to
+  -- tag-aware filetypes, so `=>` and `Array<T>` are untouched, and Swift/Dart/Lua
+  -- never see it.
+  --
+  -- It needs no nvim-ts-context-commentstring sibling: nvim-treesitter's own
+  -- tsx/jsx highlight queries already set `commentstring` per node, so built-in
+  -- `gc` emits `{/* ... */}` inside JSX with nothing extra configured. That
+  -- lookup reads the node under ONE reference position, so keep the cursor on the
+  -- tag: at column 0, or on a visual selection starting at the element's own
+  -- opening line, there is no JSX node there and you get `//` instead.
+  vim.pack.add { gh 'windwp/nvim-ts-autotag' }
+  require('nvim-ts-autotag').setup {}
 
   ---@param buf integer
   ---@param language string

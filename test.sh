@@ -426,6 +426,40 @@ else
   report mobile.poll_stops_itself_when_the_project_state_is_corrupt false
 fi
 
+# Needs its own process, for a reason none of the ones above share: this is the
+# only check that types. nvim-ts-autotag hooks insert-mode `>` with a
+# buffer-local keymap, so the only honest way to cover it is to actually press
+# the keys -- asserting the module loaded or that `setup` ran would stay green
+# with the feature broken. But `nvim_feedkeys` leaves typeahead that drains
+# whenever the event loop next runs, which in the shared block below (25 checks,
+# one nvim) is at a moment no check controls: the line under test decayed to
+# `> ` and the corruption could just as easily have landed in a neighbour.
+# Escaping does not fix that -- folding `<Esc>` into the same feedkeys via
+# `nvim_replace_termcodes` was tried and still decayed. Isolation does.
+#
+# Load-bearing inside the probe, do not tidy: assert IMMEDIATELY after feedkeys,
+# with no `stopinsert` and no `vim.wait` following it, because any event-loop
+# pumping after the keys is what corrupts the line; and keep the wait on the
+# highlighter BEFORE typing, because close_tag() parses the tree synchronously
+# and needs the tsx parser already resolved.
+if nvim --headless -u init.lua -l /dev/stdin >/dev/null 2>&1 <<'PROBE'
+vim.o.verbose = 0
+local path = vim.fs.joinpath(vim.fn.tempname(), 'AutoTag.tsx')
+vim.fn.mkdir(vim.fs.dirname(path), 'p')
+vim.fn.writefile({ 'const a = ' }, path)
+vim.cmd.edit(path)
+local buf = vim.api.nvim_get_current_buf()
+vim.wait(20000, function() return vim.treesitter.highlighter.active[buf] ~= nil end, 100)
+vim.api.nvim_feedkeys('A<View>', 'x', false)
+local line = vim.api.nvim_get_current_line()
+assert(line == 'const a = <View></View>', 'auto-close did not fire, got: ' .. line)
+PROBE
+then
+  report treesitter.nvim_ts_autotag_auto_closes_jsx_tags true
+else
+  report treesitter.nvim_ts_autotag_auto_closes_jsx_tags false
+fi
+
 nvim --headless -u init.lua -l /dev/stdin <<'LUA'
 -- `nvim -l` bumps 'verbose' to 1, which makes guess-indent narrate every buffer
 -- this script opens straight into the middle of the ndjson stream.
