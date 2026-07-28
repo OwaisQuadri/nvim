@@ -80,7 +80,11 @@ Lane B — chores/tooling (size ≤ 2)
 
 | id | item | value | tc | unblock | CoD | size | WSJF | MoSCoW |
 |---|---|---|---|---|---|---|---|---|
+| t1 | TICKET-1 acceptance run (manual, on the real machine) | 4 | 5 | 1 | 10 | 1 | 10.0 | ✅ done |
 | r3 | keystroke-log source (adopt keystats/keylog) | 3 | 2 | 2 | 7 | 1 | 7.0 | Should |
+| t3 | pin auto-rename with a check (claimed in init.lua + README, guarded by nothing) | 2 | 1 | 1 | 4 | 1 | 4.0 | Should |
+| t2 | goto-def stub fallback: search `.js`, collapse 4 ref attempts to 1 | 3 | 1 | 1 | 5 | 2 | 2.5 | Should |
+| t4 | test.sh is not hermetic — shares plugin/data dirs with `~/.config/nvim` | 2 | 1 | 2 | 5 | 2 | 2.5 | Could |
 | m2 | async mobile project scan (kills a 1.6s UI freeze) | 3 | 2 | 1 | 6 | 1 | 6.0 | Should |
 | m3 | doctor: skip_validate_bin cache filename | 1 | 1 | 1 | 3 | 1 | 3.0 | Could |
 | r14 | make the perf guard run itself (README + test.sh) | 3 | 2 | 1 | 6 | 1 | 6.0 | Should |

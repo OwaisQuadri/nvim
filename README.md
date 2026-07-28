@@ -87,7 +87,7 @@ non-zero if any fail, so it works as a pre-merge gate:
 **Mobile** — one `<leader>m*` lane over three stacks, see [Mobile](#mobile-leaderm)
 - `xcodebuild.nvim` (macOS only) — build, run, test, debug, and manage an iOS/macOS/Swift-package project without opening Xcode: scheme and device pickers, test explorer, code coverage, log parsing
 - `flutter-tools.nvim` — `dartls`, device/emulator pickers, hot reload, widget guides, the widget outline, and the Dart debugger
-- React Native / Expo has no plugin — it's `ts_ls` + `eslint` + `prettier` for the code, and the mobile lane shells out to `npx expo` for the dev loop
+- React Native / Expo has no build/run plugin — it's `ts_ls` + `eslint` + `prettier` + `nvim-ts-autotag` for the code, and the mobile lane shells out to `npx expo` for the dev loop
 - `nvim-dap`, `nvim-dap-ui` (+ `nvim-nio`) — the debugger, shared by the Swift lane (via Xcode's `lldb-dap`) and the Flutter lane
 
 **Completion**
@@ -95,6 +95,7 @@ non-zero if any fail, so it works as a pre-merge gate:
 
 **Treesitter**
 - `nvim-treesitter` — parsers for bash, c, diff, html, lua, luadoc, markdown(+inline), query, vim, vimdoc, swift, dart, javascript, typescript, tsx, json, yaml
+- `nvim-ts-autotag` — auto-close and auto-rename JSX/TSX tags (`<View>` gets its `</View>`, editing either side of the pair updates the other); mini.pairs closes brackets and quotes but has no concept of a tag
 
 **Personal extras**
 - `harpoon` (harpoon2 branch) — jump between a handful of pinned files
