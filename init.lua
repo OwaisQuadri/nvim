@@ -826,21 +826,13 @@ do
   -- Auto-close brackets and quotes as you type them.
   require('mini.pairs').setup()
 
-  -- Smooth-scroll the screen on movements that jump the view (<C-d>/<C-u>,
-  -- gg/G, zz/zt/zb, search jumps, mouse wheel) instead of teleporting.
   -- Cursor animation stays off: smear-cursor already animates the cursor.
   local animate = require 'mini.animate'
   animate.setup {
     cursor = { enable = false },
-    scroll = {
-      timing = animate.gen_timing.quadratic { duration = 80, unit = 'total' },
-      -- Only animate scrolls bigger than one line, so j/k near the window
-      -- edge and mouse-wheel ticks stay instant.
-      subscroll = animate.gen_subscroll.equal {
-        predicate = function(total_scroll) return total_scroll > 1 end,
-      },
-    },
-    -- Window open/close/resize animations off: keep it to scrolling.
+    -- Scroll animation off: it interferes with mousewheel scrolling.
+    scroll = { enable = false },
+    -- Window open/close/resize animations off too.
     resize = { enable = false },
     open = { enable = false },
     close = { enable = false },
