@@ -513,6 +513,69 @@ struct Fixture {
 }
 ]]
 
+-- The four arrow keys, pressed the way a user presses them. hardtime's
+-- `disabled_keys` default maps every one of them -- in insert, and in the `''`
+-- mode that covers normal and visual -- to an expr that returns `""`. No error,
+-- no message, the key simply stops doing anything, which is how "my arrow keys
+-- are gone" shipped once already. SECTION 21 turns each of the four off BY NAME
+-- because setup merges with `tbl_deep_extend('force', ...)`, so a bare
+-- `disabled_keys = {}` merges INTO the defaults and changes nothing.
+--
+-- Ordered ahead of `hardtime.enabled_and_toggleable` on purpose, and the reason
+-- is measured rather than assumed: that check toggles hardtime off, `M.disable`
+-- deletes every `disabled_keys` mapping on the way out, and afterwards the
+-- arrows move again whatever SECTION 21 says (`is_plugin_enabled` false, zero
+-- arrow maps, cursor moves -- with the fix and with it reverted alike). The two
+-- asserts at the top are what keep a later reorder honest: they turn this red
+-- instead of leaving it green over a question it never got to ask.
+--
+-- Both halves earn their place by covering the other's blind spot. The mapping
+-- scan alone would miss a `disabled_filetypes` buffer, where hardtime stands
+-- down and lets the keystroke through while still holding the map; driving the
+-- keys alone would miss a rename of the `desc` hardtime tags its own maps with.
+check('keys.arrow_keys_are_not_swallowed_by_hardtime', function()
+  vim.wait(3000, function() return package.loaded['hardtime'] and require('hardtime').is_plugin_enabled end, 50)
+  assert(require('hardtime').is_plugin_enabled, 'hardtime is disabled here, so it could not have swallowed anything and this check proves nothing')
+  -- hardtime installs `disabled_keys` in the same loop as its restricted keys,
+  -- so a live `gj` is proof that loop ran -- and therefore that an unmapped
+  -- arrow is a decision rather than a setup that never got that far.
+  assert(vim.fn.maparg('gj', 'n', false, true).desc == 'which_key_ignore', 'hardtime mapped none of its own keys, so an unmapped arrow proves nothing')
+
+  open_scratch('Arrows.txt', 'one\ntwo\nthree')
+  for _, mode in ipairs { 'n', 'i', 'v' } do
+    for _, key in ipairs { '<Up>', '<Down>', '<Left>', '<Right>' } do
+      -- Matched on hardtime's own `desc`, not on "is anything bound here":
+      -- telescope and blink.cmp bind the arrows too, and those are wanted.
+      assert(vim.fn.maparg(key, mode, false, true).desc ~= 'which_key_ignore', ('hardtime mapped %s in %s mode, which swallows it'):format(key, mode))
+    end
+  end
+
+  local function press(at, keys)
+    vim.api.nvim_win_set_cursor(0, at)
+    vim.api.nvim_feedkeys(vim.keycode(keys), 'x', false)
+    return vim.api.nvim_win_get_cursor(0)
+  end
+
+  local down = press({ 1, 0 }, '<Down>')
+  assert(down[1] == 2, '<Down> did not move the cursor down, it stayed on line ' .. down[1])
+  local up = press({ 2, 0 }, '<Up>')
+  assert(up[1] == 1, '<Up> did not move the cursor up, it stayed on line ' .. up[1])
+  local right = press({ 1, 0 }, '<Right>')
+  assert(right[2] == 1, '<Right> did not move the cursor right, it stayed on column ' .. right[2])
+  local left = press({ 1, 2 }, '<Left>')
+  assert(left[2] == 1, '<Left> did not move the cursor left, it stayed on column ' .. left[2])
+
+  -- Insert is a separate mapping from the other two, not the same one seen
+  -- three times: hardtime's default lists mode `{ '', 'i' }`, so `''` carries
+  -- normal and visual and `'i'` is its own entry. One arrow through each.
+  local inserted = press({ 1, 0 }, 'i<Down><Esc>')
+  assert(inserted[1] == 2, '<Down> was swallowed in insert mode, the cursor stayed on line ' .. inserted[1])
+  local visual = press({ 1, 0 }, 'v<Down><Esc>')
+  assert(visual[1] == 2, '<Down> was swallowed in visual mode, the cursor stayed on line ' .. visual[1])
+
+  return true
+end)
+
 -- hardtime configures itself on a ~500ms timer, so this waits on the thing that
 -- timer actually produces. `package.loaded.hardtime` would be true the instant
 -- `require` returned, and stay true with the `setup{}` call deleted.
@@ -1155,9 +1218,693 @@ check('lsp.sourcekit_attaches_to_a_swift_buffer', function()
   return vim.tbl_contains(vim.tbl_map(function(c) return c.name end, vim.lsp.get_clients { bufnr = buf }), 'sourcekit')
 end)
 
+-- "i need to be able to select the quick fix for whichever line im on. i cant
+-- find it." The cursor-cell version of `code_action` discards every diagnostic
+-- whose range does not cover the cursor COLUMN, so parking one column off the
+-- squiggle offers nothing -- indistinguishable from there being no fix at all.
+--
+-- Driven through the REAL `gra` callback (`maparg`, so a keymap left pointing at
+-- the raw `vim.lsp.buf.code_action` fails here) against a fake in-process server
+-- that RECORDS the request it receives, with the cursor deliberately outside the
+-- diagnostic's range. Asserting the keymap exists would prove nothing about
+-- scope, so this asserts what crossed the wire and what reached the picker.
+check('lsp.quick_fix_covers_the_whole_line_not_the_cursor_cell', function()
+  local root = vim.fn.tempname()
+  vim.fn.mkdir(root, 'p')
+  local path = vim.fs.joinpath(root, 'fix.txt')
+  vim.fn.writefile({ 'local target = 1', 'print(target)' }, path)
+  local uri = vim.uri_from_fname(path)
+  -- Columns 6..12 are the word `target`. The cursor parks on the `1` at column
+  -- 15: outside the diagnostic AND not column 0, so a request built from the
+  -- cursor rather than the line shows up in the range as well.
+  local diagnostic = {
+    range = { start = { line = 0, character = 6 }, ['end'] = { line = 0, character = 12 } },
+    severity = 1,
+    message = 'target is never used',
+    source = 'quickfix_fixture',
+  }
+
+  local recorded
+  local server = function(dispatchers)
+    local closing = false
+    return {
+      request = function(method, params, callback)
+        if method == 'initialize' then
+          -- textDocumentSync is what makes nvim send didOpen at all, and no
+          -- didOpen means no diagnostics ever get published back.
+          callback(nil, { capabilities = { codeActionProvider = true, textDocumentSync = 1 } })
+        elseif method == 'textDocument/codeAction' then
+          recorded = params
+          callback(nil, { { title = 'Fix the unused local', kind = 'quickfix' } })
+        else
+          callback(nil, nil)
+        end
+        return true, 1
+      end,
+      notify = function(method)
+        -- Published on didOpen the way a real server does, so the diagnostic
+        -- lands in this client's own namespace instead of being planted there.
+        if method == 'textDocument/didOpen' then
+          vim.schedule(function() dispatchers.notification('textDocument/publishDiagnostics', { uri = uri, diagnostics = { diagnostic } }) end)
+        end
+        return true
+      end,
+      is_closing = function() return closing end,
+      terminate = function() closing = true end,
+    }
+  end
+
+  vim.cmd.edit(path)
+  local buf = vim.api.nvim_get_current_buf()
+  local client_id = assert(vim.lsp.start({ name = 'quickfix_fixture', cmd = server, root_dir = root }, { bufnr = buf }), 'fake client did not start')
+  assert(vim.wait(5000, function() return #vim.lsp.get_clients { bufnr = buf, name = 'quickfix_fixture' } > 0 end, 20), 'fake client never attached')
+  assert(vim.wait(5000, function() return #vim.diagnostic.get(buf) > 0 end, 20), 'the fixture diagnostic never arrived')
+
+  local offered
+  local select = vim.ui.select
+  vim.ui.select = function(items, _, on_choice)
+    offered = items
+    on_choice(nil) -- choosing nothing: applying the action is not what is under test
+  end
+  vim.api.nvim_win_set_buf(0, buf)
+  vim.api.nvim_win_set_cursor(0, { 1, 15 })
+  local ok, err = pcall(function()
+    local gra = vim.fn.maparg('gra', 'n', false, true)
+    assert(gra and gra.callback, '`gra` is not mapped in a buffer with a server attached')
+    -- Asserted HERE and not in the keymap check below, because `gra` is
+    -- buffer-local to LspAttach: with no server attached, `maparg` answers with
+    -- Neovim's own core default instead.
+    assert(gra.desc and gra.desc:lower():find('quick fix', 1, true), '`gra` does not say "quick fix": ' .. vim.inspect(gra.desc))
+    gra.callback()
+    assert(vim.wait(5000, function() return offered ~= nil end, 20), 'no code action ever reached the picker')
+  end)
+  vim.ui.select = select
+  assert(ok, err)
+
+  assert(recorded, 'the server never received a codeAction request')
+  local sent = recorded.context.diagnostics
+  assert(#sent == 1, ('the cursor sat at column 15 and the request carried %d diagnostics, not the 1 on the line'):format(#sent))
+  assert(sent[1].message == diagnostic.message, 'a different diagnostic was sent: ' .. vim.inspect(sent[1]))
+  assert(recorded.range.start.character == 0, ('the request started at column %d -- the cursor cell, not the line'):format(recorded.range.start.character))
+  assert(recorded.range['end'].character >= 15, 'the request stopped short of the end of the line')
+  assert(recorded.range.start.line == 0 and recorded.range['end'].line == 0, 'the request spanned lines the cursor was not on')
+
+  -- Visual mode is the other half of the same key. A SELECTION is already an
+  -- explicit range, so widening it to the cursor's line would shrink a two-line
+  -- selection back down to one.
+  recorded = nil
+  vim.api.nvim_win_set_cursor(0, { 1, 0 })
+  local visual_ok, visual_err = pcall(function()
+    vim.api.nvim_feedkeys(vim.keycode 'Vj', 'x', false)
+    assert(vim.api.nvim_get_mode().mode == 'V', 'could not get into linewise visual mode')
+    local ca = vim.fn.maparg('<leader>ca', 'x', false, true)
+    assert(ca and ca.callback, '<leader>ca is not mapped in visual mode')
+    ca.callback()
+    assert(vim.wait(5000, function() return recorded ~= nil end, 20), 'the visual-mode ask never reached the server')
+  end)
+  vim.api.nvim_feedkeys(vim.keycode '<Esc>', 'x', false)
+  assert(visual_ok, visual_err)
+  -- Both ends, because `Vj` leaves the cursor on line 2: a range built from the
+  -- CURSOR line is also 1..1, and only the start tells the two apart.
+  assert(recorded.range.start.line == 0 and recorded.range['end'].line == 1, ('a two-line selection asked about lines %d..%d'):format(recorded.range.start.line, recorded.range['end'].line))
+  vim.lsp.stop_client(client_id)
+  assert(#offered == 1 and offered[1].action.title == 'Fix the unused local', 'the picker was not offered the action: ' .. vim.inspect(offered))
+  return true
+end)
+
+-- The discoverability half of the same complaint: the words "quick fix" have to
+-- be ON the keys, because that is what gets typed into which-key and `:map`.
+-- `<leader>q` is the diagnostic LIST and `<leader>xa` is Xcode's own actions --
+-- both decoys that a search for "quickfix" used to surface first.
+check('lsp.quick_fix_keys_are_findable_by_name', function()
+  -- No LSP attached in this check on purpose: these two have to exist and be
+  -- named ANYWHERE, which is the half `gra` cannot cover (it is buffer-local to
+  -- LspAttach, so in a plain buffer it is Neovim's core default, not ours).
+  local wanted = { '<leader>ca' }
+  if vim.uv.os_uname().sysname == 'Darwin' then wanted[#wanted + 1] = '<D-.>' end
+  for _, lhs in ipairs(wanted) do
+    for _, mode in ipairs { 'n', 'x' } do
+      local map = vim.fn.maparg(lhs, mode, false, true)
+      assert(map and map.callback, ('%s is not mapped in %s mode'):format(lhs, mode))
+      assert(map.desc and map.desc:lower():find('quick fix', 1, true), ('%s (%s) does not say "quick fix": %s'):format(lhs, mode, vim.inspect(map.desc)))
+    end
+  end
+  -- Pressing it with no server must SAY so rather than look broken. A fresh
+  -- empty buffer, because the check above leaves a client that is still
+  -- shutting down attached to ITS buffer.
+  vim.cmd.enew()
+  assert(#vim.lsp.get_clients { bufnr = 0 } == 0, 'the no-server case needs a buffer with no server')
+  local notes = {}
+  local notify = vim.notify
+  vim.notify = function(msg, level) notes[#notes + 1] = { msg = tostring(msg), level = level } end
+  local ok, err = pcall(vim.fn.maparg('<leader>ca', 'n', false, true).callback)
+  vim.notify = notify
+  assert(ok, 'the quick fix key threw with no server attached: ' .. tostring(err))
+  assert(#notes == 1 and notes[1].level == vim.log.levels.WARN, 'said nothing (or said it quietly) with no server attached: ' .. vim.inspect(notes))
+  -- Nvim's own fallback says "textDocument/codeAction is not supported by any of
+  -- the servers registered for the current buffer" -- the protocol talking.
+  -- Someone who cannot find the feature is owed a sentence, not a method name.
+  assert(not notes[1].msg:find('textDocument/', 1, true), 'the no-server message is protocol jargon: ' .. notes[1].msg)
+  assert(notes[1].msg:lower():find('language server', 1, true), 'the no-server message never says what is missing: ' .. notes[1].msg)
+  return true
+end)
+
+-- A rename has to PERSIST. `apply_workspace_edit` opens every other affected
+-- file as a hidden buffer, edits it in memory and stops, so without the
+-- writeback in init.lua the second file still holds the old symbol on disk and
+-- the change dies with the session. Every assertion below reads the FILES on
+-- disk, never the buffers, because the buffers were always right.
+--
+-- Driven end to end through the real `vim.lsp.buf.rename` -> real rename
+-- handler -> real workspace edit, with only the SERVER faked: an in-process
+-- `cmd` function needs no installed language server, no network and no plugin
+-- state, so these are self-contained and deterministic. `.txt` fixtures keep
+-- every configured server from auto-attaching, which makes the fake client
+-- provably the one that produced the edit.
+---@param opts table|nil shape: 'changes'|'documentChanges'; prepare: fun(paths)
+---@return table result a/b disk contents, warnings about b, b's buffer
+local function drive_rename(opts)
+  opts = opts or {}
+  local root = vim.fn.tempname()
+  vim.fn.mkdir(root, 'p')
+  local a, b = vim.fs.joinpath(root, 'a.txt'), vim.fs.joinpath(root, 'b.txt')
+  vim.fn.writefile({ 'local target = 1' }, a)
+  vim.fn.writefile({ 'print(target)' }, b)
+  local uri_a, uri_b = vim.uri_from_fname(a), vim.uri_from_fname(b)
+
+  -- `target` sits at columns 6..12 on line 1 of both fixtures.
+  local function edits()
+    return { { range = { start = { line = 0, character = 6 }, ['end'] = { line = 0, character = 12 } }, newText = 'renamed' } }
+  end
+  local workspace_edit
+  if opts.shape == 'documentChanges' or opts.extra_changes then
+    -- version 0 means "unversioned", which is what skips nvim's staleness check.
+    local changes = {}
+    -- Prepended, so a handler that dies on one of these never reaches a/b and
+    -- the assertions below can tell.
+    for _, extra in ipairs(opts.extra_changes or {}) do changes[#changes + 1] = extra end
+    changes[#changes + 1] = { textDocument = { uri = uri_a, version = 0 }, edits = edits() }
+    changes[#changes + 1] = { textDocument = { uri = uri_b, version = 0 }, edits = opts.no_edit_for_b and {} or edits() }
+    workspace_edit = { documentChanges = changes }
+  else
+    workspace_edit = { changes = { [uri_a] = edits(), [uri_b] = opts.no_edit_for_b and {} or edits() } }
+  end
+
+  local server = function()
+    local closing = false
+    return {
+      request = function(method, _, callback)
+        if method == 'initialize' then
+          callback(nil, { capabilities = { renameProvider = true } })
+        elseif method == 'textDocument/rename' then
+          callback(nil, workspace_edit)
+        else
+          callback(nil, nil)
+        end
+        return true, 1
+      end,
+      notify = function() return true end,
+      is_closing = function() return closing end,
+      terminate = function() closing = true end,
+    }
+  end
+
+  -- One window, deliberately: whether nvim fires BufLeave for a buffer switch it
+  -- makes internally depends on the window layout, and earlier checks in this
+  -- process leave ~20 windows lying around. With them open the autosave never
+  -- fires and the check below passes with its fix deleted.
+  pcall(vim.cmd, 'only')
+  vim.cmd.edit(a)
+  local buf = vim.api.nvim_get_current_buf()
+  local client_id = assert(vim.lsp.start({ name = 'rename_fixture', cmd = server, root_dir = root }, { bufnr = buf }), 'fake client did not start')
+  assert(vim.wait(5000, function() return #vim.lsp.get_clients { bufnr = buf, name = 'rename_fixture' } > 0 end, 20), 'fake client never attached')
+
+  -- SECTION 16 autosaves on BufLeave, and loading the other file fires one, so
+  -- the CURRENT file reaches disk with or without the writeback -- that is the
+  -- whole reason this bug reads as "cross-file only". Lift the autosave for the
+  -- drive or half of every assertion below is decoration. (If that autocmd is
+  -- ever reworded, nothing is lifted and the a-side quietly stops
+  -- discriminating; the b-side never depended on it.)
+  -- Grouped BY ID, and that is load-bearing: one `nvim_create_autocmd` call with
+  -- three events produces three entries sharing ONE id, so deleting per entry
+  -- calls `nvim_del_autocmd` on the same id three times. The extra deletes free
+  -- a luaref that has already been freed and invalidate an unrelated plugin's
+  -- BufLeave callback -- which then throws "attempt to call a number value" out
+  -- of the next `:edit`, several checks later, nowhere near the cause.
+  local autosave = {}
+  if not opts.keep_autosave then
+    local by_id = {}
+    for _, au in ipairs(vim.api.nvim_get_autocmds { event = { 'FocusLost', 'BufLeave', 'InsertLeave' } }) do
+      if au.command == 'silent! update' then
+        by_id[au.id] = by_id[au.id] or {}
+        table.insert(by_id[au.id], au.event)
+      end
+    end
+    for id, events in pairs(by_id) do
+      vim.api.nvim_del_autocmd(id)
+      autosave[#autosave + 1] = events
+    end
+    -- If SECTION 16 is ever reworded, this lift silently stops lifting and every
+    -- a-side assertion below quietly stops discriminating. Fail loudly instead.
+    assert(#autosave > 0, 'found no autosave autocmd to lift, so the a-side assertions would prove nothing')
+  end
+
+  local notes = {}
+  local notify = vim.notify
+  vim.notify = function(msg, level, ...)
+    notes[#notes + 1] = { msg = tostring(msg), level = level }
+    return notify(msg, level, ...)
+  end
+  -- Both of the above are process-wide. A throw between here and the restore
+  -- would leak them into every check that follows, so nothing between them is
+  -- allowed to escape.
+  local function restore()
+    vim.notify = notify
+    for _, events in ipairs(autosave) do
+      vim.api.nvim_create_autocmd(events, { desc = 'Autosave modified buffers (no-op if nothing changed)', pattern = '*', command = 'silent! update' })
+    end
+  end
+
+  local function disk(path) return table.concat(vim.fn.readfile(path), '\n') end
+  local eventignore_before = vim.o.eventignore
+  local immediate, messages
+  local ok, err = pcall(function()
+    if opts.prepare then opts.prepare { root = root, a = a, b = b, uri_b = uri_b, buf_a = buf } end
+    -- An earlier check (or a plugin float) may own the window by now, and
+    -- `rename` reads its position from the CURRENT window.
+    vim.api.nvim_win_set_buf(0, buf)
+    vim.api.nvim_win_set_cursor(0, { 1, 6 })
+    vim.cmd 'messages clear'
+    vim.lsp.buf.rename('renamed', { bufnr = buf, name = 'rename_fixture' })
+    -- Sampled before yielding to the event loop: the writeback is part of the
+    -- handler, not scheduled after it.
+    immediate = disk(a)
+    -- The write loop runs to completion inside one handler call, so a.txt
+    -- landing on disk means the whole loop is done -- b.txt is already decided.
+    vim.wait(5000, function() return disk(a) ~= 'local target = 1' end, 20)
+    messages = vim.api.nvim_exec2('messages', { output = true }).output
+  end)
+  restore()
+  vim.lsp.stop_client(client_id)
+  if not ok then error(err, 0) end
+  -- The writeback suppresses BufLeave across the edit; leaving that set would
+  -- quietly disarm every BufLeave autocmd in the session from here on.
+  assert(vim.o.eventignore == eventignore_before, 'eventignore was left as ' .. vim.inspect(vim.o.eventignore))
+
+  local warnings = 0
+  for _, note in ipairs(notes) do
+    if note.msg:find('b.txt', 1, true) then warnings = warnings + 1 end
+  end
+  return {
+    a = disk(a),
+    b = disk(b),
+    path_a = a,
+    path_b = b,
+    warnings = warnings,
+    notes = notes,
+    messages = messages,
+    immediate = immediate,
+    buf_a = buf,
+    buf_b = vim.uri_to_bufnr(uri_b),
+  }
+end
+
+-- Both halves of the spec, because the config runs servers that speak each:
+-- lua_ls answers a rename with `changes`, ts_ls and sourcekit with
+-- `documentChanges`, and they are separate branches of the writeback.
+check('lsp.rename_writes_every_file_it_touched', function()
+  for _, shape in ipairs { 'changes', 'documentChanges' } do
+    local out = drive_rename { shape = shape }
+    assert(out.a == 'local renamed = 1', shape .. ': the renamed file never reached disk')
+    assert(out.b == 'print(renamed)', shape .. ': the OTHER renamed file never reached disk')
+    assert(out.warnings == 0, shape .. ': warned about a file it wrote fine')
+    -- Sampled before the drive yielded to the event loop. Deferring the write
+    -- loop (a `vim.schedule` around it) still ends up green everywhere else.
+    assert(out.immediate == 'local renamed = 1', shape .. ': the write was deferred out of the handler, not done in it')
+    -- `mods.silent` on the write: a 30-file rename otherwise prints 30 lines.
+    assert(not out.messages:find(' written', 1, true), shape .. ': the write announced itself: ' .. vim.inspect(out.messages))
+  end
+  return true
+end)
+
+-- Writing a file the user is mid-edit in would push half-typed lines to disk
+-- behind their back. The rename still lands in the buffer, so their own `:w`
+-- persists it -- but this process must not decide that for them.
+check('lsp.rename_leaves_your_unsaved_work_alone', function()
+  -- BOTH shapes, and not for symmetry: `changes` hands out its URIs through
+  -- `pairs()`, so a writeback that only sampled the first URI survived this
+  -- check 4 runs in 5. `documentChanges` is ordered, which makes the kill
+  -- deterministic.
+  for _, shape in ipairs { 'changes', 'documentChanges' } do
+    local out = drive_rename {
+      shape = shape,
+      prepare = function(paths)
+        -- Loaded but never entered, so the autosave cannot be what saved it.
+        local buf = vim.fn.bufadd(paths.b)
+        vim.fn.bufload(buf)
+        vim.api.nvim_buf_set_lines(buf, 1, -1, false, { 'half-typed junk' })
+      end,
+    }
+    assert(out.a == 'local renamed = 1', shape .. ': the renamed file never reached disk')
+    assert(out.b == 'print(target)', shape .. ': wrote a buffer the user had unsaved edits in: ' .. vim.inspect(out.b))
+    assert(vim.bo[out.buf_b].modified, shape .. ': left the unsaved buffer looking saved')
+    local lines = vim.api.nvim_buf_get_lines(out.buf_b, 0, -1, false)
+    assert(lines[1] == 'print(renamed)' and lines[2] == 'half-typed junk', shape .. ': the in-buffer rename was lost: ' .. vim.inspect(lines))
+  end
+  return true
+end)
+
+-- The same promise for the buffer you are STANDING IN, which is the common case
+-- and the one no other check covered.
+check('lsp.rename_leaves_the_current_buffer_unsaved_work_alone', function()
+  local out = drive_rename {
+    shape = 'documentChanges',
+    prepare = function(paths)
+      vim.api.nvim_buf_set_lines(paths.buf_a, 1, -1, false, { 'half-typed junk' })
+    end,
+  }
+  assert(out.a == 'local target = 1', 'the writeback wrote the buffer you were mid-edit in: ' .. vim.inspect(out.a))
+  assert(vim.bo[out.buf_a].modified, 'left the current buffer looking saved')
+  assert(out.b == 'print(renamed)', 'the OTHER file should still have been written')
+  return true
+end)
+
+-- `:write` on a readonly file does NOT raise -- it no-ops -- so a pcall around
+-- the write reports success while the rename silently fails to persist. The
+-- only honest answer is whether the buffer is still modified afterwards.
+check('lsp.rename_reports_a_file_it_could_not_write', function()
+  local out = drive_rename {
+    prepare = function(paths) vim.fn.setfperm(paths.b, 'r--r--r--') end,
+  }
+  assert(out.a == 'local renamed = 1', 'the writable file never reached disk')
+  assert(out.b == 'print(target)', 'a readonly file changed, so this fixture proves nothing')
+  assert(out.warnings == 1, 'expected exactly one warning naming the unwritable file, got ' .. out.warnings)
+  local warning = out.notes[#out.notes]
+  assert(warning.level == vim.log.levels.WARN, 'a file that did not get written was reported below WARN: ' .. tostring(warning.level))
+  assert(warning.msg:find(out.path_b, 1, true), 'the report does not name the file by path: ' .. warning.msg)
+  assert(not warning.msg:find('file://', 1, true), 'the report shows a raw URI instead of a path: ' .. warning.msg)
+  return true
+end)
+
+-- A `file://` URI can still resolve to a scratch buffer. Nothing can write one,
+-- and it never reports `modified`, so the writeback skips it for free -- what
+-- this pins is that it stays QUIET about it. Reporting on "the write raised"
+-- instead of on "the buffer is still dirty" would announce a failure the user
+-- has no file to fix.
+check('lsp.rename_ignores_a_buffer_that_is_not_a_file', function()
+  local out = drive_rename {
+    prepare = function(paths)
+      local buf = vim.fn.bufadd(paths.b)
+      vim.fn.bufload(buf)
+      vim.bo[buf].buftype = 'nofile'
+    end,
+  }
+  assert(out.a == 'local renamed = 1', 'the real file never reached disk')
+  assert(out.warnings == 0, 'warned about a buffer that was never writable, got ' .. out.warnings)
+  assert(out.b == 'print(target)', 'wrote a buffer that is not a file')
+  return true
+end)
+
+-- "Cannot rename that symbol" is an ordinary answer: the server replies null.
+-- Reaching for `result.documentChanges` on it throws inside the handler, where
+-- the failure surfaces as a stack trace and nothing else.
+check('lsp.rename_survives_a_server_that_cannot_rename', function()
+  local notes = {}
+  local notify = vim.notify
+  vim.notify = function(msg, level) notes[#notes + 1] = { msg = tostring(msg), level = level } end
+  local ok, err = pcall(vim.lsp.handlers['textDocument/rename'], nil, nil, { client_id = 1, bufnr = 0, method = 'textDocument/rename' })
+  vim.notify = notify
+  assert(ok, 'a null rename result crashed the handler: ' .. tostring(err))
+  -- Not crashing is half of it. Swallowing the default handler's "couldn't
+  -- provide rename result" turns an impossible rename into a keypress that does
+  -- nothing at all, which is the exact complaint this branch exists to answer.
+  assert(#notes == 1, ('a null result produced %d messages, not the one that says why nothing happened'):format(#notes))
+  assert(notes[1].msg:lower():find('rename', 1, true), 'the message never mentions the rename: ' .. notes[1].msg)
+  return true
+end)
+
+-- Being NAMED in an edit is not the same as being CHANGED by it. A file the
+-- edit left alone must not be written, or the writeback quietly clobbers
+-- whatever else touched that file since the buffer was read.
+check('lsp.rename_leaves_a_named_but_unchanged_file_alone', function()
+  -- Rewriting it produces byte-identical content, so content cannot answer this
+  -- and the timestamp has to. Backdated an hour BEFORE the buffer loads: nvim
+  -- records that timestamp as the file's own, so a write moves mtime by an hour
+  -- and no clock resolution is involved. (Diverging the file on disk instead
+  -- proves nothing -- vim refuses to overwrite a file that changed underneath
+  -- it, so that fixture passes with the guard deleted.)
+  local backdated = os.time() - 3600
+  local out = drive_rename {
+    no_edit_for_b = true,
+    prepare = function(paths)
+      assert(vim.uv.fs_utime(paths.b, backdated, backdated), 'could not backdate the fixture')
+      vim.fn.bufload(vim.fn.bufadd(paths.b))
+    end,
+  }
+  assert(out.a == 'local renamed = 1', 'the renamed file never reached disk')
+  assert(out.b == 'print(target)', 'changed a file the edit never touched')
+  local mtime = vim.uv.fs_stat(out.path_b).mtime.sec
+  assert(mtime == backdated, ('rewrote a file the edit never changed (mtime moved %d seconds)'):format(mtime - backdated))
+  return true
+end)
+
+-- `acwrite` is a buffer a plugin owns and writes through its own BufWriteCmd
+-- (oil, fugitive). Skipping those was the original `buftype == ''` behaviour and
+-- it left the rename unpersisted; handing them the write is the point. Plenty of
+-- real writers never clear `modified` afterwards, so judging THEM by `modified`
+-- reports a failure over a file that is on disk.
+check('lsp.rename_hands_an_acwrite_buffer_to_its_own_writer', function()
+  local fired = 0
+  local out = drive_rename {
+    prepare = function(paths)
+      local buf = vim.fn.bufadd(paths.b)
+      vim.fn.bufload(buf)
+      vim.bo[buf].buftype = 'acwrite'
+      vim.api.nvim_create_autocmd('BufWriteCmd', {
+        buffer = buf,
+        callback = function()
+          fired = fired + 1
+          vim.fn.writefile(vim.api.nvim_buf_get_lines(buf, 0, -1, false), paths.b)
+          -- deliberately NOT clearing `modified`, exactly like the sloppy ones
+        end,
+      })
+    end,
+  }
+  assert(fired == 1, ('the plugin writer ran %d times, not once'):format(fired))
+  assert(out.b == 'print(renamed)', 'the plugin writer ran but the rename is not on disk: ' .. vim.inspect(out.b))
+  assert(out.warnings == 0, 'reported a failure for a file its owner wrote successfully')
+  return true
+end)
+
+-- Installing on every attach must not stomp whatever is in the chain. Nothing
+-- here wraps this handler today, so this is a landmine rather than a live bug --
+-- and a landmine no other check can stand on.
+check('lsp.rename_writeback_keeps_a_later_wrapper_in_the_chain', function()
+  local seen = 0
+  local before = vim.lsp.handlers['textDocument/rename']
+  local ok, out = pcall(drive_rename, {
+    prepare = function()
+      local inner = vim.lsp.handlers['textDocument/rename']
+      vim.lsp.handlers['textDocument/rename'] = function(...)
+        seen = seen + 1
+        return inner(...)
+      end
+      -- One more attach, the way opening any second file produces one.
+      local client = vim.lsp.get_clients { name = 'rename_fixture' }[1]
+      vim.api.nvim_exec_autocmds('LspAttach', { buffer = 0, data = { client_id = client.id } })
+    end,
+  })
+  vim.lsp.handlers['textDocument/rename'] = before
+  assert(ok, out)
+  assert(seen == 1, ('a wrapper installed after us was dropped from the chain (ran %d times)'):format(seen))
+  assert(out.a == 'local renamed = 1' and out.b == 'print(renamed)', 'the writeback stopped writing while sharing the chain')
+  return true
+end)
+
+-- A WorkspaceEdit may also carry create/rename/delete file ops, which have no
+-- `textDocument` at all. `apply_workspace_edit` performs those on disk itself,
+-- so the writeback has nothing to do for them except not fall over.
+check('lsp.rename_handles_an_edit_that_also_creates_a_file', function()
+  local created = vim.fn.tempname() .. '.txt'
+  local out = drive_rename { extra_changes = { { kind = 'create', uri = vim.uri_from_fname(created) } } }
+  assert(out.a == 'local renamed = 1' and out.b == 'print(renamed)', 'a file op stopped the ordinary edits from being written')
+  assert(vim.fn.filereadable(created) == 1, 'the create op never happened, so this fixture proves nothing')
+  assert(out.warnings == 0, 'warned about a file it wrote fine')
+  return true
+end)
+
+-- Not every URI in an edit is a path on disk: a `jdt://`-style URI resolves to a
+-- perfectly ordinary-looking buffer whose write RAISES. That must not take the
+-- rest of the edit down with it, which is what the pcall is for.
+check('lsp.rename_reports_a_uri_it_cannot_write', function()
+  local uri = 'jdt://contents/fixture/Fixture.class'
+  local out = drive_rename {
+    extra_changes = { { textDocument = { uri = uri, version = 0 }, edits = { { range = { start = { line = 0, character = 0 }, ['end'] = { line = 0, character = 0 } }, newText = 'x' } } } },
+  }
+  assert(out.a == 'local renamed = 1', 'an unwritable URI stopped the real files from being written')
+  assert(out.b == 'print(renamed)', 'an unwritable URI stopped the OTHER real file from being written')
+  local reported = 0
+  for _, note in ipairs(out.notes) do
+    if note.msg:find('jdt://', 1, true) then reported = reported + 1 end
+  end
+  assert(reported == 1, 'expected exactly one report naming the unwritable URI, got ' .. reported)
+  return true
+end)
+
 os.exit(failures == 0 and 0 or 1)
 LUA
 inline_status=$?
 [ "$inline_status" -eq 0 ] || failures=$((failures + 1))
+
+# Needs its own process: it re-sources the whole config three times, which is not
+# something to do in the middle of the shared inline run above.
+#
+# `:Reload` re-sources init.lua, so a closure-local "already installed" flag
+# resets while the handler it installed is still in place -- and the next
+# LspAttach wraps the wrapper. The stack is invisible until something makes each
+# layer speak, so the fixture renames into an unwritable file: one report per
+# installed wrapper, and the count is the number of layers.
+if CONFIG_UNDER_TEST="$PWD/init.lua" nvim --headless -u init.lua -l /dev/stdin >/dev/null 2>&1 <<'PROBE'
+vim.o.verbose = 0
+local root = vim.fn.tempname()
+vim.fn.mkdir(root, 'p')
+local a, b = vim.fs.joinpath(root, 'a.txt'), vim.fs.joinpath(root, 'b.txt')
+vim.fn.writefile({ 'local target = 1' }, a)
+vim.fn.writefile({ 'print(target)' }, b)
+vim.fn.setfperm(b, 'r--r--r--')
+
+local function edits()
+  return { { range = { start = { line = 0, character = 6 }, ['end'] = { line = 0, character = 12 } }, newText = 'renamed' } }
+end
+local workspace_edit = { changes = { [vim.uri_from_fname(a)] = edits(), [vim.uri_from_fname(b)] = edits() } }
+local server = function()
+  local closing = false
+  return {
+    request = function(method, _, callback)
+      if method == 'initialize' then
+        callback(nil, { capabilities = { renameProvider = true } })
+      elseif method == 'textDocument/rename' then
+        callback(nil, workspace_edit)
+      else
+        callback(nil, nil)
+      end
+      return true, 1
+    end,
+    notify = function() return true end,
+    is_closing = function() return closing end,
+    terminate = function() closing = true end,
+  }
+end
+
+vim.cmd.edit(a)
+local buf = vim.api.nvim_get_current_buf()
+local client_id = assert(vim.lsp.start({ name = 'rename_fixture', cmd = server, root_dir = root }, { bufnr = buf }), 'fake client did not start')
+assert(vim.wait(5000, function() return #vim.lsp.get_clients { bufnr = buf, name = 'rename_fixture' } > 0 end, 20), 'fake client never attached')
+
+-- Three reload cycles: re-source the config, then let the next LspAttach re-run
+-- the install exactly as a real attach after a `:Reload` would.
+for _ = 1, 3 do
+  vim.cmd.source(vim.env.CONFIG_UNDER_TEST)
+  vim.api.nvim_exec_autocmds('LspAttach', { buffer = buf, data = { client_id = client_id } })
+end
+
+local notes = {}
+local notify = vim.notify
+vim.notify = function(msg, ...)
+  notes[#notes + 1] = tostring(msg)
+  return notify(msg, ...)
+end
+vim.api.nvim_win_set_buf(0, buf)
+vim.api.nvim_win_set_cursor(0, { 1, 6 })
+vim.lsp.buf.rename('renamed', { bufnr = buf, name = 'rename_fixture' })
+vim.wait(5000, function() return #notes > 0 end, 20)
+vim.notify = notify
+
+local warnings = 0
+for _, msg in ipairs(notes) do
+  if msg:find('b.txt', 1, true) then warnings = warnings + 1 end
+end
+assert(warnings == 1, ('after 3 reloads, one rename reported the same file %d times'):format(warnings))
+PROBE
+then
+  report lsp.rename_writeback_survives_reloads true
+else
+  report lsp.rename_writeback_survives_reloads false
+fi
+
+# Its own process, and the reason is measured, not assumed: the BufLeave that
+# `apply_workspace_edit` provokes arrives a TICK LATER, so it only lands if
+# something keeps the loop turning afterwards -- and in the shared run above it
+# never arrives at all (0 firings, with and without the writeback; 1 firing in a
+# fresh process that idles for a second, measured both ways).
+#
+# What this pins is a sentence in README.md rather than a branch in init.lua:
+# the buffer you are STANDING IN gets written by SECTION 16's autosave, unsaved
+# work and all, whatever the writeback does. It was true before the writeback
+# existed. Suppressing BufLeave across the edit does not fix it -- the event
+# lands after the handler has already restored `eventignore` -- so the README
+# says so instead, and this is what keeps that sentence honest.
+if nvim --headless -u init.lua -l /dev/stdin >/dev/null 2>&1 <<'PROBE'
+vim.o.verbose = 0
+local root = vim.fn.tempname()
+vim.fn.mkdir(root, 'p')
+local a, b = vim.fs.joinpath(root, 'a.txt'), vim.fs.joinpath(root, 'b.txt')
+vim.fn.writefile({ 'local target = 1' }, a)
+vim.fn.writefile({ 'print(target)' }, b)
+
+local function edits()
+  return { { range = { start = { line = 0, character = 6 }, ['end'] = { line = 0, character = 12 } }, newText = 'renamed' } }
+end
+local workspace_edit = { changes = { [vim.uri_from_fname(a)] = edits(), [vim.uri_from_fname(b)] = edits() } }
+local server = function()
+  local closing = false
+  return {
+    request = function(method, _, callback)
+      if method == 'initialize' then
+        callback(nil, { capabilities = { renameProvider = true } })
+      elseif method == 'textDocument/rename' then
+        callback(nil, workspace_edit)
+      else
+        callback(nil, nil)
+      end
+      return true, 1
+    end,
+    notify = function() return true end,
+    is_closing = function() return closing end,
+    terminate = function() closing = true end,
+  }
+end
+
+vim.cmd.edit(a)
+local buf = vim.api.nvim_get_current_buf()
+local client_id = assert(vim.lsp.start({ name = 'rename_fixture', cmd = server, root_dir = root }, { bufnr = buf }), 'fake client did not start')
+assert(vim.wait(5000, function() return #vim.lsp.get_clients { bufnr = buf, name = 'rename_fixture' } > 0 end, 20), 'fake client never attached')
+
+local autosaves = 0
+for _, au in ipairs(vim.api.nvim_get_autocmds { event = 'BufLeave' }) do
+  if au.command == 'silent! update' then autosaves = autosaves + 1 end
+end
+assert(autosaves == 1, ('expected SECTION 16 to autosave on BufLeave, found %d such autocmds'):format(autosaves))
+
+-- Unsaved work in the buffer being renamed IN, typed in normal mode so no
+-- InsertLeave can be what saves it.
+vim.api.nvim_buf_set_lines(buf, 1, -1, false, { 'half-typed junk' })
+vim.api.nvim_win_set_buf(0, buf)
+vim.api.nvim_win_set_cursor(0, { 1, 6 })
+vim.lsp.buf.rename('renamed', { bufnr = buf, name = 'rename_fixture' })
+
+-- The other file is the writeback's own work, and it is synchronous.
+assert(table.concat(vim.fn.readfile(b), '\n') == 'print(renamed)', 'the other file was not written: ' .. table.concat(vim.fn.readfile(b), '\n'))
+-- The current file is the autosave's, and it is not.
+local landed = vim.wait(5000, function() return table.concat(vim.fn.readfile(a), '\n') ~= 'local target = 1' end, 20)
+local on_disk = table.concat(vim.fn.readfile(a), ' | ')
+assert(landed and on_disk:find('half-typed junk', 1, true), 'SECTION 16 no longer writes the current buffer after a rename, so README.md now overstates the exception: ' .. on_disk)
+assert(vim.o.eventignore == '', 'eventignore was left as ' .. vim.inspect(vim.o.eventignore))
+PROBE
+then
+  report lsp.rename_current_buffer_is_autosaved_as_readme_says true
+else
+  report lsp.rename_current_buffer_is_autosaved_as_readme_says false
+fi
 
 exit $([ "$failures" -eq 0 ] && echo 0 || echo 1)
