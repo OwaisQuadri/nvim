@@ -692,6 +692,7 @@ do
       { '<leader>t', group = '[T]oggle' },
       { '<leader>h', group = 'Git [H]unk', mode = { 'n', 'v' } }, -- Enable gitsigns recommended keymaps first
       { 'gr', group = 'LSP Actions', mode = { 'n' } },
+      { '<leader>c', group = '[C]ode', mode = { 'n', 'v' } },
       -- <leader>w forwards raw to <C-w>, but which-key doesn't know that by
       -- itself -- proxy it so the full native <C-w> preset list (h/j/k/l,
       -- s/v splits, etc.) shows up under <leader>w too, not just the keys
@@ -1572,6 +1573,136 @@ do
     vim.lsp.buf.hover()
   end
 
+  -- The "quick fix" -- code actions for the whole LINE the cursor sits on.
+  --
+  -- `vim.lsp.buf.code_action()` with no arguments asks at the exact cursor CELL:
+  -- nvim collects the line's diagnostics and then discards every one whose range
+  -- does not contain the cursor COLUMN (the `diagnostic_contains_cursor` filter
+  -- in `lsp/buf.lua`, which only runs when no range was passed). Sit one column
+  -- off the squiggle -- on the indent, or past the end of the word -- and the fix
+  -- you can plainly see is not offered, which reads as "there is no quick fix
+  -- here". Handing it the whole LINE as the range is what skips that filter:
+  -- nvim narrows to the cursor only when the caller gave it no range of its own.
+  --
+  -- Passing `context.diagnostics` explicitly fixes it too, and was tried first,
+  -- but it is redundant with the range -- each defeats the filter alone, so with
+  -- both present neither can be tested -- and it is slightly worse: nvim's own
+  -- gather reads each CLIENT's diagnostic namespaces, where `vim.diagnostic.get`
+  -- would also hand a server the linter's diagnostics. It needs
+  -- `vim.lsp.diagnostic.from` as well, since the raw `vim.diagnostic.get` table
+  -- is not the shape the request wants.
+  local function quick_fix()
+    if #vim.lsp.get_clients { bufnr = 0, method = 'textDocument/codeAction' } == 0 then
+      vim.notify('No language server is attached here, so there are no quick fixes to offer', vim.log.levels.WARN)
+      return
+    end
+    -- A visual selection is already an explicit range, and nvim skips the cursor
+    -- filter when it has one; only normal mode needs the line widened for it.
+    local mode = vim.api.nvim_get_mode().mode
+    if mode == 'v' or mode == 'V' then return vim.lsp.buf.code_action() end
+    local row = vim.api.nvim_win_get_cursor(0)[1]
+    vim.lsp.buf.code_action { range = { start = { row, 0 }, ['end'] = { row, #vim.api.nvim_get_current_line() } } }
+  end
+
+  -- Top level, not buffer-local to LspAttach: a key that silently does not exist
+  -- in a buffer with no server is indistinguishable from a key that found no
+  -- fixes, and "I can't find it" is the bug being fixed here. `<D-.>` is the
+  -- chord every other editor uses for this; `<leader>ca` is the cross-platform
+  -- twin (`<D-u>` in SECTION 12 sets the same precedent, keymap next to its own
+  -- feature). Both descriptions say "quick fix" in as many words, because that
+  -- is what someone searching their own keymaps will type.
+  vim.keymap.set({ 'n', 'x' }, '<leader>ca', quick_fix, { desc = '[C]ode [A]ction -- quick fix for this line' })
+  map_platform({ 'n', 'x' }, '<D-.>', nil, quick_fix, { desc = 'Code action -- quick fix for this line' })
+
+  -- A rename edits every file the server names, but only in MEMORY:
+  -- `apply_workspace_edit` loads the other files as hidden buffers, edits them,
+  -- and stops there. The file you were IN still reaches disk -- loading those
+  -- other buffers fires a `BufLeave`, and the autosave in SECTION 16 answers it
+  -- -- which is precisely why this reads as "rename doesn't cross files": one
+  -- file is saved for you and the rest stay dirty in hidden buffers and die
+  -- with the session. Wrap the rename RESPONSE handler rather than the `grn`
+  -- keymap: `grn` is also a Neovim 0.11 core default and a rename can come from
+  -- a code action or a picker, and every one of them lands here.
+  local function install_rename_writeback()
+    -- `:Reload` re-sources this file, so a closure-local "already installed"
+    -- flag resets and the next LspAttach wraps our own wrapper -- N reloads, N
+    -- redundant write loops, N duplicate warnings per rename. Both the handler
+    -- being wrapped AND the wrapper live in globals, which survive `:source`,
+    -- which makes three cases tellable apart:
+    --   * the handler is our own wrapper -- a reload; rebuild around the same
+    --     base so edits to this code take effect and the chain stays one deep;
+    --   * nothing installed yet -- take what is there as the base;
+    --   * someone else wrapped or replaced us since -- leave it alone. Blindly
+    --     re-wrapping the stashed base would drop their wrapper on the floor.
+    local current = vim.lsp.handlers['textDocument/rename']
+    local ours = current == _G.kickstart_rename_writeback
+    if _G.kickstart_rename_handler and not ours then return end
+    _G.kickstart_rename_handler = ours and _G.kickstart_rename_handler or current
+    local base = _G.kickstart_rename_handler
+    local writeback
+    writeback = function(err, result, ctx)
+      -- A null result is the ordinary "can't rename that symbol" answer, and
+      -- there is nothing to write; the default handler says so out loud.
+      if not result then return base(err, result, ctx) end
+
+      -- Only the files the edit actually named -- never the user's other dirty
+      -- buffers. `documentChanges` takes precedence over `changes`, matching the
+      -- order `apply_workspace_edit` applies them in; the create/rename/delete
+      -- file ops carry no `textDocument` and it already did those on disk.
+      local uris = {}
+      if result.documentChanges then
+        for _, change in ipairs(result.documentChanges) do
+          if change.textDocument then uris[#uris + 1] = change.textDocument.uri end
+        end
+      else
+        for uri in pairs(result.changes or {}) do uris[#uris + 1] = uri end
+      end
+
+      -- Sampled BEFORE the edit lands, because afterwards every one of them is
+      -- modified. A file you already had unsaved work in is yours to save --
+      -- writing it would push half-typed lines to disk behind your back -- and
+      -- skipping it still leaves the rename in the buffer for your own `:w`.
+      --
+      -- This covers the files the rename REACHED. It cannot cover the buffer you
+      -- are sitting in: loading the others fires a BufLeave for it, SECTION 16's
+      -- autosave answers that a tick later, and your half-typed line goes to
+      -- disk regardless -- with or without this writeback, before it existed and
+      -- after. Suppressing BufLeave across the edit was tried and does NOT fix
+      -- it (the event arrives after the handler has already put `eventignore`
+      -- back), so README.md documents it rather than promising otherwise.
+      local yours = {}
+      for _, uri in ipairs(uris) do yours[uri] = vim.bo[vim.uri_to_bufnr(uri)].modified end
+
+      base(err, result, ctx)
+
+      local unwritten = {}
+      for _, uri in ipairs(uris) do
+        local buf = vim.uri_to_bufnr(uri)
+        -- No `buftype` guard, and no `nvim_buf_is_loaded` one either: neither an
+        -- unloaded buffer nor a `nofile`/`nowrite` scratch ever reports
+        -- `modified`, so both would be branches nothing could ever make fail.
+        -- What a `buftype` test WOULD change is `acwrite`, where a plugin owns
+        -- the write through `BufWriteCmd` -- and handing it the write is right.
+        if not yours[uri] and vim.bo[buf].modified then
+          -- `silent` keeps a 30-file rename from printing 30 "written" lines.
+          -- The pcall is for a write that RAISES (E212 on a `jdt://`-style URI);
+          -- a readonly file is quieter than that -- `:write` no-ops and raises
+          -- nothing -- so `modified` after the write is the only honest answer.
+          --
+          -- Except for `acwrite`, where a plugin's `BufWriteCmd` did the writing
+          -- and plenty of them never clear `modified`. There, "the write did not
+          -- raise" is the only confirmation on offer, and insisting on
+          -- `modified` reports a failure over a file that is on disk.
+          local wrote = pcall(vim.api.nvim_buf_call, buf, function() vim.cmd.write { mods = { silent = true } } end)
+          if not wrote or (vim.bo[buf].modified and vim.bo[buf].buftype ~= 'acwrite') then unwritten[#unwritten + 1] = vim.uri_to_fname(uri) end
+        end
+      end
+      if #unwritten > 0 then vim.notify('Renamed, but could not write:\n' .. table.concat(unwritten, '\n'), vim.log.levels.WARN) end
+    end
+    _G.kickstart_rename_writeback = writeback
+    vim.lsp.handlers['textDocument/rename'] = writeback
+  end
+
   --  This function gets run when an LSP attaches to a particular buffer.
   --    That is to say, every time a new file is opened that is associated with
   --    an lsp (for example, opening `main.rs` is associated with `rust_analyzer`) this
@@ -1590,12 +1721,17 @@ do
       end
 
       -- Rename the variable under your cursor.
-      --  Most Language Servers support renaming across files, etc.
+      --  Most Language Servers support renaming across files, etc. -- the
+      --  writeback installed here is what makes those other files persist.
+      --  Installed on attach, not at startup, so it costs nothing to launch.
+      install_rename_writeback()
       map('grn', vim.lsp.buf.rename, '[R]e[n]ame')
 
-      -- Execute a code action, usually your cursor needs to be on top of an error
-      -- or a suggestion from your LSP for this to activate.
-      map('gra', vim.lsp.buf.code_action, '[G]oto Code [A]ction', { 'n', 'x' })
+      -- Execute a code action ("quick fix"). Kickstart bound this to the raw
+      -- `vim.lsp.buf.code_action`, which only offers what sits under the cursor
+      -- COLUMN; `quick_fix` above widens it to the line. Same key, and `gra` is
+      -- a Neovim 0.11 core default, so it keeps working with no relearning.
+      map('gra', quick_fix, '[G]oto Code [A]ction -- quick fix for this line', { 'n', 'x' })
 
       -- WARN: This is not Goto Definition, this is Goto Declaration.
       --  For example, in C this would take you to the header.
@@ -2352,6 +2488,14 @@ do
     restriction_mode = strict and 'block' or 'hint',
     disable_mouse = false, -- gentle: leave the mouse usable
     -- `hint` (better-motion suggestions) and `notification` are on by default.
+    --
+    -- `disabled_keys` is NOT governed by restriction_mode. Its default swallows
+    -- the four arrow keys in every mode plus insert (config.lua:62-67), so they
+    -- die silently however gentle the rest of the setup is. Each key needs its
+    -- own `false`: setup merges with `tbl_deep_extend('force', ...)`, so a bare
+    -- `disabled_keys = {}` merges into the defaults and changes nothing.
+    -- Arrows stay live; the habit coach still hints when you lean on them.
+    disabled_keys = { ['<Up>'] = false, ['<Down>'] = false, ['<Left>'] = false, ['<Right>'] = false },
   }
 
   vim.keymap.set('n', '<leader>tH', '<cmd>Hardtime toggle<CR>', { desc = '[T]oggle [H]ardtime habit coach' })

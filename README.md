@@ -133,8 +133,9 @@ Leader key is **Space**.
 
 | Key | Action |
 |---|---|
-| `grn` | Rename symbol |
-| `gra` | Code action |
+| `grn` | Rename symbol, and save the files it changed. Files you already had unsaved edits in are left for you to save, and anything it can't write is named in a warning. (The buffer you're standing in is the exception: the autosave writes it a moment later, unsaved work and all.) |
+| `<D-.>` / `<leader>ca` | Quick fix -- code actions for the whole line the cursor is on (normal and visual; says so when no language server is attached) |
+| `gra` | Quick fix / code action, same line-wide behaviour (Neovim's own default key) |
 | `grD` | Goto declaration |
 | `grr` | Goto references |
 | `gri` | Goto implementation |
@@ -143,7 +144,7 @@ Leader key is **Space**.
 | `gO` | Document symbols |
 | `gW` | Workspace symbols |
 | `<leader>th` | Toggle inlay hints |
-| `<leader>q` | Diagnostics to quickfix list |
+| `<leader>q` | Diagnostics to quickfix LIST (the list of problems, not the quick fix menu -- that's `<D-.>`) |
 | `]d` / `[d` | Next / previous diagnostic (crosses files) |
 | `yd` | Yank the diagnostics on this line to the clipboard |
 | `yD` | Yank every diagnostic in the buffer, line-numbered |
