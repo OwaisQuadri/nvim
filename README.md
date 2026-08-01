@@ -39,7 +39,7 @@ Silicon: neither publishes an `x86_64` macOS binary Mason can fetch, so on an
 Intel Mac use `brew install swiftformat swiftlint` and the rest is unaffected.
 
 Also install `ripgrep`, `fd`, and `tree-sitter-cli` (`brew install ripgrep fd
-tree-sitter-cli`) — Telescope's live grep (`<leader>sg`, `<D-S-f>`)
+tree-sitter-cli`) — Telescope's live grep (`<leader>sg`, `<C-S-f>`)
 hard-requires `ripgrep` and won't work without it; `fd` just makes file
 search faster; `tree-sitter-cli` is required to compile treesitter parsers
 (note: Homebrew's `tree-sitter` formula only installs the library, not the
@@ -50,7 +50,7 @@ Branch naming and other repo conventions live in [`CLAUDE.md`](CLAUDE.md).
 `run.sh` opens a new Ghostty window running Neovim with this repo's
 `init.lua` (`nvim -u init.lua .`) so you can try out config changes without
 touching `~/.config/nvim`. `build.sh` is still a hello-world script for testing
-the `<D-b>` Cmd-chord below.
+the `<C-S-b>` chord below.
 
 `test.sh` is the headless smoke test: it boots `nvim --headless -u init.lua`
 and asserts that the plugins, keymaps, formatters, linters, and LSP this config
@@ -78,6 +78,8 @@ non-zero if any fail, so it works as a pre-merge gate:
 **LSP**
 - `nvim-lspconfig`, `mason.nvim`, `mason-lspconfig.nvim`, `mason-tool-installer.nvim` — LSP server management
 - `fidget.nvim` — LSP progress notifications
+- `tiny-code-action.nvim` — code-action picker: same telescope UI, but every action shows a diff preview of what it would change, best fix ranked first
+- `nvim-lightbulb` — gutter lightbulb when a code action is available at the cursor
 - Servers: `lua_ls`, `ts_ls` (JS/TS/React Native), `eslint`, `sourcekit` (Swift, via Xcode's `sourcekit-lsp` — not managed by Mason), `dartls` (Flutter, owned by `flutter-tools.nvim` — also not Mason's)
 
 **Formatting & linting**
@@ -91,7 +93,8 @@ non-zero if any fail, so it works as a pre-merge gate:
 - `nvim-dap`, `nvim-dap-ui` (+ `nvim-nio`) — the debugger, shared by the Swift lane (via Xcode's `lldb-dap`) and the Flutter lane
 
 **Completion**
-- `blink.cmp`, `LuaSnip` — autocomplete + snippets
+- `blink.cmp`, `LuaSnip` — autocomplete + snippets; docs pane auto-shows, buffer-word fallback when no language server is attached, treesitter-colored labels
+- `llama.vim` — Cursor-style AI ghost text from a fully local llama.cpp server (Qwen2.5-Coder-3B, fill-in-the-middle): no account, no revocable free tier, code never leaves the machine. Needs `brew install llama.cpp`; the server auto-starts detached on first insert (see [AI ghost text](#ai-ghost-text-llamavim-local)); `<leader>ta` toggles suggestions
 
 **Treesitter**
 - `nvim-treesitter` — parsers for bash, c, diff, html, lua, luadoc, markdown(+inline), query, vim, vimdoc, swift, dart, javascript, typescript, tsx, json, yaml
@@ -134,7 +137,8 @@ Leader key is **Space**.
 | Key | Action |
 |---|---|
 | `grn` | Rename symbol, and save the files it changed. Files you already had unsaved edits in are left for you to save, and anything it can't write is named in a warning. (The buffer you're standing in is the exception: the autosave writes it a moment later, unsaved work and all.) |
-| `<D-.>` / `<leader>ca` | Quick fix -- code actions for the whole line the cursor is on (normal and visual; says so when no language server is attached) |
+| `<C-.>` / `<leader>ca` | Quick fix -- code actions for the whole line the cursor is on, each with a diff preview of what it would change, best fix first (normal and visual; says so when no language server is attached). In insert mode `<C-.>` instead opens the completion menu with the line's quick fixes ranked on top, Xcode-style |
+| `<leader>co` / `<leader>cm` / `<leader>cf` | Whole-file source actions: organize imports / add missing imports / fix all auto-fixable (applies directly when the server offers exactly one) |
 | `gra` | Quick fix / code action, same line-wide behaviour (Neovim's own default key) |
 | `grD` | Goto declaration |
 | `grr` | Goto references |
@@ -144,7 +148,7 @@ Leader key is **Space**.
 | `gO` | Document symbols |
 | `gW` | Workspace symbols |
 | `<leader>th` | Toggle inlay hints |
-| `<leader>q` | Diagnostics to quickfix LIST (the list of problems, not the quick fix menu -- that's `<D-.>`) |
+| `<leader>q` | Diagnostics to quickfix LIST (the list of problems, not the quick fix menu -- that's `<C-.>`) |
 | `]d` / `[d` | Next / previous diagnostic (crosses files) |
 | `yd` | Yank the diagnostics on this line to the clipboard |
 | `yD` | Yank every diagnostic in the buffer, line-numbered |
@@ -171,6 +175,26 @@ so these write to the real system clipboard.
 | `<leader>tm` | Toggle markdown render (on by default in markdown buffers) |
 | `<leader>tc` | Toggle sticky scope context (on by default) |
 | `<leader>tH` | Toggle hardtime habit coach (on by default) |
+| `<leader>ta` | Toggle AI ghost text (on by default) |
+
+### AI ghost text (llama.vim, local)
+
+Fully local fill-in-the-middle completion via llama.cpp — no account, and no
+free tier anyone can revoke. The model server starts itself in the background
+on the first insert if nothing is answering on port 8012 (`:LlamaServer` does
+the same by hand; a first-ever run downloads Qwen2.5-Coder-3B, ~2GB). It runs
+detached, so it survives quitting nvim — one spawn per boot, no window to
+babysit. `Tab` accepts, but only when a suggestion is showing — otherwise it
+falls through to blink.cmp's snippet-jump and then to a normal tab, so
+nothing else loses the key. The Alt chords work everywhere regardless.
+
+| Key (insert mode) | Action |
+|---|---|
+| `Tab` / `Alt-f` | Accept the whole suggestion |
+| `Alt-w` | Accept one word |
+| `Alt-a` | Accept one line |
+| `Alt-e` / `Alt-r` | Cycle to next / previous suggestion |
+| `Ctrl-F` | Manually (re)trigger a suggestion |
 
 ### Git hunks (`<leader>h*`, via gitsigns)
 
@@ -383,19 +407,22 @@ below are the Swift ones (macOS only). Flutter debugging runs through
 | `<F5>` | Continue |
 | `<F10>` / `<F11>` / `<F12>` | Step over / into / out |
 
-### Cmd-chords (Ghostty)
+### Ctrl-chords (Ghostty + Karabiner)
 
-Requires a terminal that forwards Cmd as `<D-...>` via the Kitty keyboard
-protocol — Ghostty does this, plain Terminal.app does not. If a chord below
-doesn't fire, that's a Ghostty `keybind` passthrough config issue, not an
-`init.lua` bug.
+On macOS the physical Cmd key is rebound to Ctrl in Karabiner-Elements, so
+these are the old Cmd-chords under the same fingers. The shifted and
+punctuation ones (`<C-S-f>`, `<C-[>`, `<C-.>`) additionally need a terminal
+speaking the Kitty keyboard protocol — Ghostty does this, plain Terminal.app
+does not. If a chord doesn't fire, check Karabiner and Ghostty's `keybind`
+config before suspecting `init.lua`.
 
 | Key | Action |
 |---|---|
-| `<D-S-f>` | Project-wide search (live grep) |
-| `<D-S-o>` / `<D-p>` | Find files |
-| `<D-r>` | Run `run.sh` next to the current file, in a horizontal split terminal |
-| `<D-b>` | Run `build.sh` next to the current file, in a horizontal split terminal |
+| `<C-S-f>` | Project-wide search (live grep) |
+| `<C-S-o>` / `<C-p>` | Find files |
+| `<C-[>` / `<C-]>` | Back / forward in jump history (in `:help` buffers `<C-]>` keeps its native follow-link job) |
+| `<C-S-r>` | Run `run.sh` next to the current file, in a horizontal split terminal |
+| `<C-S-b>` | Run `build.sh` next to the current file, in a horizontal split terminal |
 
 ### Misc
 
@@ -440,9 +467,10 @@ interactive walkthrough and the fastest way to build the muscle memory.
 
 ## Windows setup
 
-This config is authored on macOS but runs on Windows too. The Cmd (`<D-…>`)
-chords are Mac/Ghostty-only; on Windows the same actions are bound to
-Ctrl/leader chords (see the table below). Launch Neovim from **Git Bash** so
+This config is authored on macOS but runs on Windows too. With Karabiner
+rebinding Cmd to Ctrl on the Mac, most chords are now the same Ctrl chords
+on every platform; the few that still differ are in the table below. Launch
+Neovim from **Git Bash** so
 the shell and `PATH` match the `.sh` helper scripts.
 
 ### 1. Config path (junction, not `~/.config/nvim`)
@@ -516,20 +544,20 @@ Run `nvim` from Git Bash. `vim.pack` clones every plugin (a few minutes the
 first time), then Mason and treesitter pull servers/parsers on demand. Run
 `:checkhealth` to confirm.
 
-### Windows keybinds (Ctrl/leader equivalents of the Mac Cmd-chords)
+### Windows keybinds (where they differ from macOS)
+
+Most chords are now identical on both platforms (`<C-s>` save-all, `<C-z>`
+undo, `<C-S-f>` live grep, `<C-p>`/`<C-S-o>` find files, `<C-[>`/`<C-]>`
+jump history). The exceptions:
 
 | Action | macOS | Windows |
 |---|---|---|
-| Save all buffers | `<D-s>` | `<C-s>` |
-| Project-wide search (live grep) | `<D-S-f>` | `<C-S-f>` |
-| Find files | `<D-p>` / `<D-S-o>` | `<C-p>` / `<C-S-o>` |
-| Undo / redo | `<D-z>` / `<D-Z>` | `<C-z>` / `<C-y>` |
+| Redo | `<C-S-z>` | `<C-y>` |
 | Delete word (insert) | `<M-BS>` | `<C-BS>` |
-| Delete to line start (insert) | `<D-BS>` | `<C-u>` |
-| Toggle Undotree | `<D-u>` | `<leader>u` |
-| Run `run.sh` beside file | `<D-r>` | `<leader>wr` |
-| Run `build.sh` beside file | `<D-b>` | `<leader>wb` |
-| Back / forward in jump history | `<D-[>` / `<D-]>` | `<C-o>` / `<C-i>` |
+| Delete to line start (insert) | `<C-BS>` | `<C-u>` |
+| Quick fix (code action) | `<C-.>` | `<leader>ca` |
+| Run `run.sh` beside file | `<C-S-r>` | `<leader>wr` |
+| Run `build.sh` beside file | `<C-S-b>` | `<leader>wb` |
 
 The `run.sh`/`build.sh` runners execute the scripts through Git Bash's `bash`
 on Windows (they run directly via `./script.sh` on macOS), so no `.bat`
