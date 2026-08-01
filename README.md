@@ -184,12 +184,13 @@ free tier anyone can revoke. The model server starts itself in the background
 on the first insert if nothing is answering on port 8012 (`:LlamaServer` does
 the same by hand; a first-ever run downloads Qwen2.5-Coder-3B, ~2GB). It runs
 detached, so it survives quitting nvim — one spawn per boot, no window to
-babysit. Accept keys are Alt chords so they never fight `<Tab>`/`<CR>`, which
-belong to snippets and the completion menu.
+babysit. `Tab` accepts, but only when a suggestion is showing — otherwise it
+falls through to blink.cmp's snippet-jump and then to a normal tab, so
+nothing else loses the key. The Alt chords work everywhere regardless.
 
 | Key (insert mode) | Action |
 |---|---|
-| `Alt-f` / `Option-Tab` | Accept the whole suggestion |
+| `Tab` / `Alt-f` | Accept the whole suggestion |
 | `Alt-w` | Accept one word |
 | `Alt-a` | Accept one line |
 | `Alt-e` / `Alt-r` | Cycle to next / previous suggestion |

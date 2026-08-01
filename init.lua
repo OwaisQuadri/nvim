@@ -2095,6 +2095,22 @@ do
       --   behavior, e.g. leaving insert mode, when the menu is already hidden).
       ['<Esc>'] = { 'hide', 'fallback' },
 
+      -- <Tab> priority chain: accept visible AI ghost text (SECTION 8.5)
+      -- first, else blink's snippet jump, else a real tab. Tab-accept is
+      -- llama.vim's own default; routing it through blink's keymap instead
+      -- of llama's is what lets all three owners of the key coexist.
+      ['<Tab>'] = {
+        function()
+          local is_ok, shown = pcall(vim.fn['llama#is_fim_hint_shown'])
+          if is_ok and shown == 1 then
+            vim.fn['llama#fim_accept'] 'full'
+            return true
+          end
+        end,
+        'snippet_forward',
+        'fallback',
+      },
+
       -- <C-.> (the physical Cmd+.): open the menu with quick fixes on top.
       ['<C-.>'] = { function(cmp) return cmp.show { providers = { 'quickfix', 'lsp', 'path', 'snippets' } } end },
 
@@ -2178,8 +2194,11 @@ do
   -- server (first run downloads the ~2GB model). Ollama cannot back this
   -- plugin -- it requires llama.cpp's native /infill endpoint.
   --
-  -- Accepts live on Alt chords, never <Tab>: the plugin's Tab/S-Tab
-  -- defaults collide with blink.cmp's snippet jumps (SECTION 8).
+  -- The plugin's own keymaps stay on Alt chords: its Tab/S-Tab defaults
+  -- would collide with blink.cmp's snippet jumps. Plain <Tab> accept DOES
+  -- exist, but lives in blink's keymap (SECTION 8) as a priority chain --
+  -- ghost text first, snippet jump second, real tab last -- which only
+  -- works from the one place that owns the key.
   -- show_info = 0 hides the inline inference-stats overlay ("| c: 1259,
   -- r: 1/16, ...") the plugin draws next to the cursor by default.
   vim.g.llama_config = {
@@ -2192,13 +2211,6 @@ do
     keymap_fim_prev = '<A-r>',
     keymap_inst_accept = '<A-f>',
   }
-
-  -- Option+Tab also accepts, scoped to when a suggestion is actually
-  -- showing -- the closest safe thing to a Tab-accept, since real <Tab>
-  -- belongs to blink.cmp.
-  vim.keymap.set('i', '<A-Tab>', function()
-    if vim.fn['llama#is_fim_hint_shown']() == 1 then vim.fn['llama#fim_accept'] 'full' end
-  end, { desc = 'AI: accept suggestion (Option+Tab)' })
 
   local is_llama_ready = false
   local function ensure_llama()
