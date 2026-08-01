@@ -33,6 +33,6 @@ never a bare `r11`.
 
 | Shortform | Resolves to |
 |---|---|
-| Cmd-chord | A `<D-...>` keybind, forwarded only by terminals speaking the Kitty keyboard protocol (Ghostty) |
+| Ctrl-chord | An editor-style `<C-...>` keybind pressed on the physical Cmd key — Karabiner-Elements rebinds Cmd to Ctrl. Shifted/punctuation ones only arrive in terminals speaking the Kitty keyboard protocol (Ghostty). Formerly "Cmd-chord" (`<D-...>`) |
 | SECTION N | A numbered block in [`init.lua`](init.lua) — the single-file config's unit of organization |
 | `<leader>` | Space, set in SECTION 1 |
