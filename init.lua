@@ -2101,8 +2101,11 @@ do
       -- of llama's is what lets all three owners of the key coexist.
       ['<Tab>'] = {
         function()
+          -- The plugin returns v:true, which crosses the Lua boundary as a
+          -- boolean, not 1 -- comparing against 1 alone silently never
+          -- matches.
           local is_ok, shown = pcall(vim.fn['llama#is_fim_hint_shown'])
-          if is_ok and shown == 1 then
+          if is_ok and (shown == true or shown == 1) then
             vim.fn['llama#fim_accept'] 'full'
             return true
           end
