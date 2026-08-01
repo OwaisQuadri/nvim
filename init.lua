@@ -2106,7 +2106,10 @@ do
           -- matches.
           local is_ok, shown = pcall(vim.fn['llama#is_fim_hint_shown'])
           if is_ok and (shown == true or shown == 1) then
-            vim.fn['llama#fim_accept'] 'full'
+            -- blink evaluates keymap functions under textlock (E565); the
+            -- buffer edit has to escape it. fim_accept rechecks the hint
+            -- state itself, so the deferred call is safe.
+            vim.schedule(function() vim.fn['llama#fim_accept'] 'full' end)
             return true
           end
         end,
