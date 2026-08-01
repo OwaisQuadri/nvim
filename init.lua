@@ -86,15 +86,12 @@ P.S. You can delete this when you're done too. It's your config now! :)
 
 -- ============================================================
 -- SECTION 0: PLATFORM HELPERS
--- This config is authored on macOS, where Karabiner-Elements rebinds the
--- physical Cmd key to Ctrl -- so the former Cmd (`<D-...>`) chords are
--- registered as Ctrl chords and the same muscle memory carries to
--- Windows/Linux unchanged. Shifted and punctuation Ctrl chords (`<C-S-f>`,
--- `<C-.>`, `<C-[>`, `<C-BS>`) still only arrive in terminals speaking the
--- Kitty keyboard protocol (Ghostty). The platform flags plus a small helper
--- stay at file scope for the chords where the platforms still genuinely
--- differ (redo, delete-to-line-start), each side only taking effect on its
--- own platform.
+-- Authored on macOS, where Karabiner-Elements rebinds the physical Cmd key
+-- to Ctrl -- the former Cmd (`<D-...>`) chords are registered as Ctrl
+-- chords, shared with Windows/Linux. Shifted and punctuation Ctrl chords
+-- (`<C-S-f>`, `<C-.>`, `<C-[>`) only arrive in terminals speaking the Kitty
+-- keyboard protocol (Ghostty). The helper below covers the chords where the
+-- platforms still differ, each side only taking effect on its own platform.
 -- ============================================================
 local is_mac = vim.uv.os_uname().sysname == 'Darwin'
 local is_win = vim.fn.has 'win32' == 1
@@ -1581,17 +1578,13 @@ do
 
   -- The "quick fix" -- code actions for the whole LINE the cursor sits on.
   --
-  -- Two layers are fixed here. The REQUEST: asking at the exact cursor cell
-  -- drops any fix whose diagnostic doesn't contain the cursor COLUMN (nvim's
-  -- `diagnostic_contains_cursor` filter, and ts_ls's own server-side
-  -- range-overlap check) -- sit on the indent one column off the squiggle
-  -- and "there is no quick fix here". Handing the whole LINE as the range
-  -- defeats both, and tiny-code-action attaches the line's diagnostics to
-  -- the request itself. The PICKER: vim.ui.select/telescope-ui-select is
-  -- structurally title-only (the protocol has no preview hook), so
-  -- tiny-code-action renders the same telescope UI with a diff preview of
-  -- what each action would change, isPreferred actions ranked first --
-  -- matching what VS Code puts at the top of its Ctrl+. menu.
+  -- The line-wide RANGE is load-bearing: a cursor-cell request drops any
+  -- fix whose diagnostic doesn't contain the cursor COLUMN (nvim's
+  -- `diagnostic_contains_cursor` filter, and ts_ls's server-side overlap
+  -- check), which reads as "no quick fix here" from the indent. The PICKER
+  -- is tiny-code-action because vim.ui.select is structurally title-only --
+  -- the protocol has no preview hook -- while this renders the same
+  -- telescope UI with a per-action diff, isPreferred first.
   local is_tiny_code_action_ready = false
   local function ensure_tiny_code_action()
     if not is_tiny_code_action_ready then
@@ -1618,12 +1611,11 @@ do
     ensure_tiny_code_action().code_action { range = { start = { row, 0 }, ['end'] = { row, #vim.api.nvim_get_current_line() } } }
   end
 
-  -- Whole-file source actions on their own chords (the VS Code / LazyVim
-  -- pattern): they are never diagnostic-anchored, so they don't belong in
-  -- the quick-fix list. Kind prefixes match dot-children per the LSP spec
-  -- ('source.organizeImports' also matches ts_ls's
-  -- 'source.organizeImports.ts'); apply = true skips the picker when the
-  -- server returns exactly one action, which is the common case here.
+  -- Whole-file source actions get their own chords: they are never
+  -- diagnostic-anchored, so they don't belong in the quick-fix list. Kind
+  -- prefixes match dot-children per the LSP spec ('source.organizeImports'
+  -- also catches ts_ls's 'source.organizeImports.ts'); apply = true applies
+  -- directly when the server returns exactly one action.
   local function source_action(kind)
     return function() vim.lsp.buf.code_action { apply = true, context = { only = { kind }, diagnostics = {} } } end
   end
@@ -1631,9 +1623,8 @@ do
   vim.keymap.set('n', '<leader>cm', source_action 'source.addMissingImports', { desc = '[C]ode: add [m]issing imports' })
   vim.keymap.set('n', '<leader>cf', source_action 'source.fixAll', { desc = '[C]ode: [f]ix all auto-fixable' })
 
-  -- A gutter lightbulb wherever a code action is available, so the quick-fix
-  -- chord gets pressed when there is something to find. Loaded on the first
-  -- LspAttach: no server, no lightbulb, no startup cost.
+  -- Gutter lightbulb marking where a code action exists. First LspAttach
+  -- loads it: no server, no startup cost.
   vim.api.nvim_create_autocmd('LspAttach', {
     desc = 'Load nvim-lightbulb once a language server attaches',
     once = true,
@@ -1998,15 +1989,13 @@ do
   vim.pack.add { { src = gh 'saghen/blink.cmp', version = vim.version.range '1.*' } }
 
   -- [[ Quick fixes inside the completion menu ]]
-  -- Xcode-style <C-.>: the completion list opens with the current line's LSP
-  -- quick fixes ranked above ordinary completions (the insert-mode sibling
-  -- of the normal-mode <C-.> in SECTION 6). Registered under a fake module
-  -- name via package.loaded because blink resolves sources with require()
-  -- and this config is a single file. Items carry insertText = '' so
-  -- selecting one never previews its title into the buffer; accepting one
-  -- skips insertion entirely (execute below never calls the default
-  -- implementation) and routes through vim.lsp.buf.code_action's own
-  -- resolve/apply pipeline instead of re-implementing workspace edits.
+  -- Xcode-style insert-mode <C-.> (SECTION 6 owns the normal-mode twin):
+  -- the menu opens with the line's quick fixes ranked above completions.
+  -- Seeded into package.loaded because blink resolves sources via require()
+  -- and this config is one file. insertText = '' keeps selection from
+  -- previewing a title into the buffer, and execute never calls the default
+  -- insertion -- accepting routes through vim.lsp.buf.code_action's own
+  -- resolve/apply pipeline.
   local quickfix_source = {}
   quickfix_source.__index = quickfix_source
 
@@ -2036,11 +2025,9 @@ do
           table.insert(items, {
             label = action.title,
             insertText = '',
-            -- isPreferred (the server's own "this is the fix") first, then
-            -- quickfix-kind actions, then the rest -- sort_text is the
-            -- tiebreak blink consults when scores are equal, which they are
-            -- on the empty query <C-.> opens with. Same ordering VS Code
-            -- uses for its Ctrl+. menu.
+            -- isPreferred first, quickfix-kind next: sort_text is the
+            -- tiebreak blink consults when scores tie, as they do on the
+            -- empty query <C-.> opens with.
             sortText = (action.isPreferred and '0' or (action.kind or ''):find '^quickfix' and '1' or '2') .. action.title,
             kind = vim.lsp.protocol.CompletionItemKind.Text,
             kind_name = 'QuickFix',
@@ -2095,20 +2082,17 @@ do
       --   behavior, e.g. leaving insert mode, when the menu is already hidden).
       ['<Esc>'] = { 'hide', 'fallback' },
 
-      -- <Tab> priority chain: accept visible AI ghost text (SECTION 8.5)
-      -- first, else blink's snippet jump, else a real tab. Tab-accept is
-      -- llama.vim's own default; routing it through blink's keymap instead
-      -- of llama's is what lets all three owners of the key coexist.
+      -- <Tab> priority chain: visible AI ghost text (SECTION 8.5), else
+      -- snippet jump, else a real tab. It lives here, in the one keymap
+      -- that owns <Tab>, so all three uses of the key coexist.
       ['<Tab>'] = {
         function()
-          -- The plugin returns v:true, which crosses the Lua boundary as a
-          -- boolean, not 1 -- comparing against 1 alone silently never
-          -- matches.
+          -- v:true crosses the Lua boundary as a boolean, not 1.
           local is_ok, shown = pcall(vim.fn['llama#is_fim_hint_shown'])
           if is_ok and (shown == true or shown == 1) then
-            -- blink evaluates keymap functions under textlock (E565); the
-            -- buffer edit has to escape it. fim_accept rechecks the hint
-            -- state itself, so the deferred call is safe.
+            -- blink runs keymap functions under textlock (E565); the buffer
+            -- edit must escape it. fim_accept rechecks hint state, so the
+            -- deferred call is safe.
             vim.schedule(function() vim.fn['llama#fim_accept'] 'full' end)
             return true
           end
@@ -2131,15 +2115,11 @@ do
     },
 
     completion = {
-      -- Auto-show the docs pane after a short beat (LazyVim's values) -- a
-      -- completion list without documentation is half the information, and
-      -- `<c-space>` still toggles it by hand.
       documentation = { auto_show = true, auto_show_delay_ms = 200 },
 
       menu = {
         draw = {
-          -- Color completion labels with the buffer's own treesitter
-          -- highlighting, and use mini.icons (SECTION 4) for the kind column.
+          -- Treesitter-colored labels; mini.icons (SECTION 4) kind column.
           treesitter = { 'lsp' },
           components = vim.g.have_nerd_font and {
             kind_icon = {
@@ -2155,9 +2135,8 @@ do
     },
 
     sources = {
-      -- 'buffer' is fallback-gated by default: it only fills in when the
-      -- LSP and path sources come back empty, so LSP-attached buffers never
-      -- see word-soup, and no-LSP buffers get something instead of nothing.
+      -- 'buffer' is fallback-gated: it only fills in when LSP and path come
+      -- back empty, so LSP-attached buffers never see word-soup.
       default = { 'lsp', 'path', 'snippets', 'buffer' },
       providers = {
         -- Only reachable through the <C-.> show() above, never while typing;
@@ -2168,13 +2147,10 @@ do
 
     snippets = { preset = 'luasnip' },
 
-    -- The rust matcher (blink's own recommended default) over the Lua one:
-    -- typo tolerance, proximity/frecency bonuses, faster on large lists.
-    -- The prebuilt binary auto-downloads because the vim.pack spec above
-    -- pins a release tag ('1.*'); if that ever fails, blink warns once and
-    -- falls back to Lua. 'exact' leads the sort order so what you literally
-    -- typed outranks fuzzier matches.
-    -- See `:help blink-cmp-config-fuzzy` for more information
+    -- The prebuilt rust matcher only auto-downloads because the vim.pack
+    -- spec above pins a release tag ('1.*'); if that fails, blink warns
+    -- once and falls back to Lua. 'exact' leads the sort order so a literal
+    -- prefix outranks fuzzier matches.
     fuzzy = { implementation = 'prefer_rust_with_warning', sorts = { 'exact', 'score', 'sort_text' } },
 
     -- Shows a signature help window while you type arguments for a function
@@ -2187,26 +2163,17 @@ end
 -- Cursor-style inline AI suggestions from a local llama.cpp server
 -- ============================================================
 do
-  -- llama.vim + a local Qwen2.5-Coder-3B FIM (fill-in-the-middle) model,
-  -- picked over account-backed free tiers (Copilot Free's 2,000/month cap,
-  -- Codeium/Windsurf/Devin's revocable unlimited plan) because open weights
-  -- running locally cannot be metered, gated, or shut down (validated
-  -- 2026-07-31). Apple's Xcode predictive-completion model was ruled out:
-  -- Xcode-private with no external API, and Swift-only anyway. 3B, not the
-  -- README-default 7B: Xcode and simulators already eat several GB on a
-  -- 16GB machine, and practitioners report no felt quality drop at 3B.
+  -- A local Qwen2.5-Coder-3B FIM (fill-in-the-middle) model: open weights
+  -- running locally cannot be metered, gated, or shut down the way
+  -- account-backed free tiers can. Ollama cannot serve this plugin -- it
+  -- needs llama.cpp's native /infill endpoint (`brew install llama.cpp`).
+  -- 3B, not the README-default 7B: Xcode and simulators already eat several
+  -- GB on a 16GB machine.
   --
-  -- Needs `brew install llama.cpp` once; :LlamaServer starts the model
-  -- server (first run downloads the ~2GB model). Ollama cannot back this
-  -- plugin -- it requires llama.cpp's native /infill endpoint.
-  --
-  -- The plugin's own keymaps stay on Alt chords: its Tab/S-Tab defaults
-  -- would collide with blink.cmp's snippet jumps. Plain <Tab> accept DOES
-  -- exist, but lives in blink's keymap (SECTION 8) as a priority chain --
-  -- ghost text first, snippet jump second, real tab last -- which only
-  -- works from the one place that owns the key.
-  -- show_info = 0 hides the inline inference-stats overlay ("| c: 1259,
-  -- r: 1/16, ...") the plugin draws next to the cursor by default.
+  -- The plugin's keymaps stay on Alt chords -- its Tab/S-Tab defaults would
+  -- collide with blink.cmp's snippet jumps; the plain-<Tab> accept lives in
+  -- blink's keymap (SECTION 8), the one owner of that key. show_info = 0
+  -- hides the inline inference-stats overlay.
   vim.g.llama_config = {
     show_info = 0,
     keymap_fim_trigger = '<C-F>',
@@ -2225,16 +2192,16 @@ do
     is_llama_ready = true
   end
 
-  -- The server runs detached, not in a terminal split: it outlives this
-  -- nvim (and every nvim), so the first insert after a reboot pays for the
-  -- spawn and every later session just finds port 8012 already answering.
+  -- Detached rather than a terminal split: the server outlives every nvim,
+  -- so the first insert after a reboot pays the spawn and later sessions
+  -- find port 8012 already answering. A first-ever run downloads the ~2GB
+  -- model before suggestions appear.
   local function start_llama_server()
     if vim.fn.executable 'llama-server' == 0 then
       vim.notify('llama-server not found -- `brew install llama.cpp` first', vim.log.levels.ERROR)
       return
     end
     vim.fn.jobstart({ 'llama-server', '--fim-qwen-3b-default' }, { detach = true })
-    -- vim.notify 'llama-server starting in the background (a first-ever run downloads the ~2GB model before suggestions appear)'
   end
 
   -- Deferred to the first InsertEnter: a suggestion can't render before
@@ -2394,9 +2361,8 @@ end
 do
   vim.pack.add { gh 'mbbill/undotree' }
 
-  -- No Ctrl chord for this one: <C-z> is undo (SECTION 2) and the old Cmd+U
-  -- chord's Ctrl landing spot, <C-u>, is half-page-up -- so the toggle lives
-  -- on <leader>u alone.
+  -- No Ctrl chord: <C-z> is undo and <C-u> is half-page-up, so the toggle
+  -- lives on <leader>u alone.
   vim.keymap.set('n', '<leader>u', vim.cmd.UndotreeToggle, { desc = 'Toggle [U]ndotree' })
 end
 
@@ -2421,12 +2387,10 @@ end
 -- Editor-style Ctrl chords (the physical Cmd key, via Karabiner Cmd->Ctrl)
 -- ============================================================
 do
-  -- On macOS these chords arrive because Karabiner-Elements rebinds Cmd to
-  -- Ctrl, so the physical keys are unchanged from this section's `<D-...>`
-  -- days. The shifted/punctuation ones (`<C-S-f>`, `<C-[>`) still need a
-  -- terminal speaking the Kitty keyboard protocol (Ghostty does; plain
-  -- Terminal.app does not). If a chord below doesn't fire, check Karabiner
-  -- and Ghostty's `keybind` config first, not this file.
+  -- The physical keys are unchanged from this section's `<D-...>` days --
+  -- Karabiner delivers them as Ctrl (SECTION 0). If a chord below doesn't
+  -- fire, check Karabiner and Ghostty's `keybind` config first, not this
+  -- file.
   local builtin = require 'telescope.builtin'
 
   -- Show everything under root, gitignored or not -- these two shouldn't
@@ -2459,12 +2423,10 @@ do
   vim.keymap.set('n', '<C-S-o>', function() builtin.find_files { find_command = find_files_command } end, { desc = 'Find files' })
   vim.keymap.set('n', '<C-p>', builtin.find_files, { desc = 'Find files' })
 
-  -- Xcode-style file/location history: physical Cmd+[ / Cmd+] (arriving as
-  -- <C-[>/<C-]>) walks the jumplist backward/forward, same as <C-o>/<C-i>
-  -- (already zz-centered). <C-[> only reads as its own key, not <Esc>, under
-  -- the Kitty keyboard protocol; and <C-]> shadows the native tag-jump, so
-  -- help buffers get a buffer-local escape hatch to keep `:help` link
-  -- following alive.
+  -- Xcode-style history: <C-[>/<C-]> walk the jumplist like <C-o>/<C-i>.
+  -- <C-[> is only distinct from <Esc> under the Kitty keyboard protocol,
+  -- and <C-]> shadows the native tag-jump -- the help-buffer map below
+  -- keeps `:help` link-following alive.
   vim.keymap.set('n', '<C-[>', '<C-o>zz', { desc = 'Back in jump history' })
   vim.keymap.set('n', '<C-]>', '<C-i>zz', { desc = 'Forward in jump history' })
   vim.api.nvim_create_autocmd('FileType', {
