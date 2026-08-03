@@ -145,6 +145,18 @@ do
   -- Enable break indent
   vim.o.breakindent = true
 
+  -- Four spaces, never tabs -- unless the project says otherwise. These are
+  -- only the DEFAULTS a fresh buffer starts from: built-in editorconfig
+  -- support, guess-indent's per-file detection (SECTION 4), ftplugins, and
+  -- modelines (this file's own `ts=2 et` line at the bottom) all retune the
+  -- buffer on read when there is evidence to go on. tabstop matches shiftwidth
+  -- so a stray real tab renders at the same width everything else indents by
+  -- (and listchars below keeps it visible as `» `).
+  vim.o.expandtab = true
+  vim.o.tabstop = 4
+  vim.o.softtabstop = 4
+  vim.o.shiftwidth = 4
+
   -- Enable undo/redo changes even after closing and reopening a file
   vim.o.undofile = true
 
@@ -1820,7 +1832,6 @@ do
     -- clangd = {},
     -- gopls = {},
     -- pyright = {},
-    -- rust_analyzer = {},
     --
     -- Some languages (like typescript) have entire language plugins that can be useful:
     --    https://github.com/pmizio/typescript-tools.nvim
@@ -1915,6 +1926,17 @@ do
   -- installed (check with `which sourcekit-lsp`).
   vim.lsp.config('sourcekit', {})
   vim.lsp.enable('sourcekit')
+
+  -- Rust, via rustup's own rust-analyzer, is also outside the mason table, and
+  -- for a sharper reason than sourcekit: rustup ships a rust-analyzer that is
+  -- version-matched to the active toolchain, and the proc-macro server ABI is
+  -- NOT stable across releases -- a mason copy can silently stop expanding
+  -- macros after a `rustup update`, and would shadow ~/.cargo/bin on PATH
+  -- besides. nvim-lspconfig's default `cmd = { 'rust-analyzer' }` finds the
+  -- rustup binary as-is (check with `which rust-analyzer`; install with
+  -- `rustup component add rust-analyzer`).
+  vim.lsp.config('rust_analyzer', {})
+  vim.lsp.enable('rust_analyzer')
 end
 
 -- ============================================================
@@ -1943,7 +1965,9 @@ do
     },
     -- You can also specify external formatters in here.
     formatters_by_ft = {
-      -- rust = { 'rustfmt' },
+      -- rust is deliberately absent: rust-analyzer's LSP formatting already
+      -- shells out to rustfmt with the crate's edition from Cargo.toml, and
+      -- `lsp_format = 'fallback'` above routes <leader>f there.
       -- Conform can also run multiple formatters sequentially
       -- python = { "isort", "black" },
       --
@@ -2241,7 +2265,7 @@ do
 
   -- Ensure basic parsers are installed
   local parsers =
-    { 'bash', 'c', 'diff', 'html', 'lua', 'luadoc', 'markdown', 'markdown_inline', 'query', 'vim', 'vimdoc', 'swift', 'dart', 'javascript', 'typescript', 'tsx', 'json', 'yaml' }
+    { 'bash', 'c', 'diff', 'html', 'lua', 'luadoc', 'markdown', 'markdown_inline', 'query', 'vim', 'vimdoc', 'swift', 'dart', 'javascript', 'typescript', 'tsx', 'json', 'yaml', 'rust', 'toml' }
   require('nvim-treesitter').install(parsers)
 
   -- mini.pairs auto-closes brackets and quotes on every filetype but has no

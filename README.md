@@ -37,6 +37,9 @@ missing rather than erroring. Everything else (LSP servers, formatters) installs
 itself via Mason — including `swiftformat` and `swiftlint`, though only on Apple
 Silicon: neither publishes an `x86_64` macOS binary Mason can fetch, so on an
 Intel Mac use `brew install swiftformat swiftlint` and the rest is unaffected.
+Rust is the other exception: it expects rustup's own toolchain (`rustup
+component add rust-analyzer rustfmt`) rather than a Mason install, so the
+server always matches the compiler.
 
 Also install `ripgrep`, `fd`, and `tree-sitter-cli` (`brew install ripgrep fd
 tree-sitter-cli`) — Telescope's live grep (`<leader>sg`, `<C-S-f>`)
@@ -65,7 +68,7 @@ non-zero if any fail, so it works as a pre-merge gate:
 ## Plugins
 
 **UI / core**
-- `guess-indent.nvim` — auto-detect file indentation
+- `guess-indent.nvim` — auto-detect file indentation (overrides the 4-space, spaces-only default when a file disagrees; `.editorconfig` and modelines override too)
 - `gitsigns.nvim` — git gutter signs + hunk stage/reset/preview/nav
 - `which-key.nvim` — shows pending keybinds as you type them
 - `rose-pine/neovim` — colorscheme
@@ -80,10 +83,10 @@ non-zero if any fail, so it works as a pre-merge gate:
 - `fidget.nvim` — LSP progress notifications
 - `tiny-code-action.nvim` — code-action picker: same telescope UI, but every action shows a diff preview of what it would change, best fix ranked first
 - `nvim-lightbulb` — gutter lightbulb when a code action is available at the cursor
-- Servers: `lua_ls`, `ts_ls` (JS/TS/React Native), `eslint`, `sourcekit` (Swift, via Xcode's `sourcekit-lsp` — not managed by Mason), `dartls` (Flutter, owned by `flutter-tools.nvim` — also not Mason's)
+- Servers: `lua_ls`, `ts_ls` (JS/TS/React Native), `eslint`, `sourcekit` (Swift, via Xcode's `sourcekit-lsp` — not managed by Mason), `dartls` (Flutter, owned by `flutter-tools.nvim` — also not Mason's), `rust_analyzer` (Rust, via rustup's own binary — not Mason's, so it always matches the toolchain)
 
 **Formatting & linting**
-- `conform.nvim` — `stylua` for Lua, `prettier` for JS/TS/JSX/TSX/JSON/CSS/HTML/Markdown/YAML, `swiftformat` for Swift, `dart format` for Dart
+- `conform.nvim` — `stylua` for Lua, `prettier` for JS/TS/JSX/TSX/JSON/CSS/HTML/Markdown/YAML, `swiftformat` for Swift, `dart format` for Dart; Rust formats through rust-analyzer's own rustfmt pass (no conform entry needed)
 - `nvim-lint` — `swiftlint` on Swift buffers (write / read / leaving insert mode)
 
 **Mobile** — one `<leader>m*` lane over three stacks, see [Mobile](#mobile-leaderm)
@@ -97,7 +100,7 @@ non-zero if any fail, so it works as a pre-merge gate:
 - `llama.vim` — Cursor-style AI ghost text from a fully local llama.cpp server (Qwen2.5-Coder-3B, fill-in-the-middle): no account, no revocable free tier, code never leaves the machine. Needs `brew install llama.cpp`; the server auto-starts detached on first insert (see [AI ghost text](#ai-ghost-text-llamavim-local)); `<leader>ta` toggles suggestions
 
 **Treesitter**
-- `nvim-treesitter` — parsers for bash, c, diff, html, lua, luadoc, markdown(+inline), query, vim, vimdoc, swift, dart, javascript, typescript, tsx, json, yaml
+- `nvim-treesitter` — parsers for bash, c, diff, html, lua, luadoc, markdown(+inline), query, vim, vimdoc, swift, dart, javascript, typescript, tsx, json, yaml, rust, toml
 - `nvim-ts-autotag` — auto-close and auto-rename JSX/TSX tags (`<View>` gets its `</View>`, editing either side of the pair updates the other); mini.pairs closes brackets and quotes but has no concept of a tag
 
 **Personal extras**
