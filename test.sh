@@ -49,7 +49,7 @@ report() { # name, ok, [detail]
 # in for the same reason: several sections do their real work in a FileType
 # autocmd, and `+qa` alone never fires one.
 startup_probe="$(nvim --headless -u init.lua \
-  -c 'lua for _, ft in ipairs { "swift", "dart", "lua", "typescriptreact", "yaml" } do vim.bo.filetype = ft end' \
+  -c 'lua for _, ft in ipairs { "swift", "dart", "lua", "typescriptreact", "yaml", "rust" } do vim.bo.filetype = ft end' \
   +qa 2>&1)"
 startup_status=$?
 # `setup failed` is in the alternation because this config reports its own
@@ -512,6 +512,15 @@ struct Fixture {
     }
 }
 ]]
+
+-- `vim.go`, not `vim.o` or `vim.bo`: the harness itself opens buffers that
+-- guess-indent and editorconfig retune buffer-locally, and this check is about
+-- the default a brand-new buffer starts from -- the global can't flake. Every
+-- conjunct differs from the Neovim default (noexpandtab/8/0/8), so deleting any
+-- one of SECTION 1's four indent lines turns exactly its conjunct red.
+check('options.four_space_indent_default', function()
+  return vim.go.expandtab == true and vim.go.tabstop == 4 and vim.go.softtabstop == 4 and vim.go.shiftwidth == 4
+end)
 
 -- The four arrow keys, pressed the way a user presses them. hardtime's
 -- `disabled_keys` default maps every one of them -- in insert, and in the `''`
@@ -1176,6 +1185,7 @@ end)
 -- default config for every server it knows about, so the latter is true whether
 -- or not this config ever asked for eslint.
 check('lsp.eslint_enabled', function() return vim.lsp.is_enabled 'eslint' end)
+check('lsp.rust_analyzer_enabled', function() return vim.lsp.is_enabled 'rust_analyzer' end)
 
 -- flutter-tools populates `dap.configurations.dart` immediately BEFORE calling
 -- `register_configurations`, so the widely-copied snippet for that hook (reset
@@ -1212,10 +1222,32 @@ end
 
 check('treesitter.highlights_swift', function() return highlights('Fixture.swift', MESSY_SWIFT) end)
 check('treesitter.highlights_dart', function() return highlights('fixture.dart', 'void main() {\n  var x = 1;\n}\n') end)
+check('treesitter.highlights_rust', function() return highlights('fixture.rs', 'fn main() {\n    let x = 1;\n}\n') end)
 check('lsp.sourcekit_attaches_to_a_swift_buffer', function()
   local buf = open_scratch('Lsp.swift', MESSY_SWIFT)
   vim.wait(30000, function() return #vim.lsp.get_clients { bufnr = buf } > 0 end, 200)
   return vim.tbl_contains(vim.tbl_map(function(c) return c.name end, vim.lsp.get_clients { bufnr = buf }), 'sourcekit')
+end)
+-- Scaffolds a real cargo layout rather than a bare .rs scratch file:
+-- rust-analyzer's root detection wants a Cargo.toml, and a buffer with no root
+-- can attach or not depending on the server version -- not a contract to test.
+check('lsp.rust_analyzer_attaches_in_a_cargo_project', function()
+  if vim.fn.executable 'rust-analyzer' == 0 then return true end -- nothing to attach without rustup
+  local root = vim.fn.tempname()
+  vim.fn.mkdir(vim.fs.joinpath(root, 'src'), 'p')
+  vim.fn.writefile({ '[package]', 'name = "fixture"', 'version = "0.1.0"', 'edition = "2021"' }, vim.fs.joinpath(root, 'Cargo.toml'))
+  vim.fn.writefile({ 'fn main() {}' }, vim.fs.joinpath(root, 'src', 'main.rs'))
+  vim.cmd.edit(vim.fs.joinpath(root, 'src', 'main.rs'))
+  local buf = vim.api.nvim_get_current_buf()
+  vim.wait(30000, function() return #vim.lsp.get_clients { bufnr = buf, name = 'rust_analyzer' } > 0 end, 200)
+  if #vim.lsp.get_clients { bufnr = buf, name = 'rust_analyzer' } > 0 then return true end
+  -- `executable()` above is satisfied by rustup's proxy shim even when the
+  -- component was never installed -- the shim then dies on spawn and the client
+  -- never initializes, which is exactly how this check first went red. Probe
+  -- the binary itself so the failure names the fix instead of just timing out.
+  local probe = vim.system({ 'rust-analyzer', '--version' }, { text = true }):wait()
+  if probe.code ~= 0 then error(('rust-analyzer exists but cannot run (%s). `rustup component add rust-analyzer` fixes this.'):format(vim.trim(probe.stderr or ''))) end
+  return false
 end)
 
 -- "i need to be able to select the quick fix for whichever line im on. i cant
