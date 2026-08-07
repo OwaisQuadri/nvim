@@ -334,6 +334,16 @@ dependencies. Add `ios/.compile` and `ios/buildServer.json` to the app's
 `.gitignore`; they're machine-specific. SwiftLint's warnings in these files were
 always real — only the SourceKit module errors were phantom.
 
+Inside nvim the whole recipe is automated: picking a scheme (`<leader>xs`)
+writes `buildServer.json` next to the project file, every successful build
+(`<leader>xb`) feeds its log through `xcode-build-server parse -a` — a merge,
+so incremental builds only ever add coverage, across targets and schemes —
+and opening a Swift file in an unbound checkout tells you which step is
+missing. Both artifacts embed absolute paths (hence the gitignore), so every
+new clone or worktree starts unbound; with the automation that costs one
+`<leader>xs` and one build. The terminal recipe above remains for sessions
+outside nvim.
+
 ### Occasional commands (no keymap, just type them)
 
 Things you reach for a few times a year, so they're commands rather than keys.
