@@ -649,6 +649,122 @@ check('dap.keymaps', function()
   return true
 end)
 
+---Shadows `xcode-build-server` with a stub that appends one `cwd|argv` line
+---per invocation, so checks assert the exact spawn without Xcode in the loop.
+---@return string record file the stub appends to
+---@return function restore puts PATH back
+local function fake_build_server()
+  local bindir = vim.fn.tempname()
+  vim.fn.mkdir(bindir, 'p')
+  local record = vim.fs.joinpath(bindir, 'calls')
+  local script = vim.fs.joinpath(bindir, 'xcode-build-server')
+  vim.fn.writefile({ '#!/bin/sh', ('printf "%%s|%%s\\n" "$PWD" "$*" >> %s'):format(record) }, script)
+  vim.fn.setfperm(script, 'rwxr-xr-x')
+  local previous_path = vim.env.PATH
+  vim.env.PATH = bindir .. ':' .. previous_path
+  return record, function() vim.env.PATH = previous_path end
+end
+
+---Runs `body` with xcodebuild's project settings swapped for `fields`, then
+---restores them even on error, so one check's fixture can't leak into another.
+local function with_project_settings(fields, body)
+  local settings = require('xcodebuild.project.config').settings
+  local saved = { projectFile = settings.projectFile, scheme = settings.scheme, workingDirectory = settings.workingDirectory }
+  settings.projectFile, settings.scheme, settings.workingDirectory = fields.projectFile, fields.scheme, fields.workingDirectory
+  local ok, err = pcall(body)
+  settings.projectFile, settings.scheme, settings.workingDirectory = saved.projectFile, saved.scheme, saved.workingDirectory
+  if not ok then error(err, 0) end
+end
+
+-- Drive the event the scheme picker fires and assert the exact spawn: the
+-- `config` subcommand, a `-workspace` flag matching the project file, and --
+-- the reason the config owns this instead of the plugin's own integration --
+-- a cwd pinned to the project file's directory rather than wherever nvim was
+-- launched, since `config` writes buildServer.json to its cwd.
+check('xcode.build_server_rebinds_on_scheme_change', function()
+  local record, restore_path = fake_build_server()
+  local ios = vim.fs.joinpath(vim.fn.tempname(), 'ios')
+  local workspace = vim.fs.joinpath(ios, 'App.xcworkspace')
+  vim.fn.mkdir(workspace, 'p')
+  local line
+  with_project_settings({ projectFile = workspace, scheme = 'App', workingDirectory = ios }, function()
+    vim.api.nvim_exec_autocmds('User', { pattern = 'XcodebuildProjectSettingsUpdated' })
+    vim.wait(5000, function() return vim.fn.filereadable(record) == 1 end, 50)
+    line = vim.fn.filereadable(record) == 1 and vim.fn.readfile(record)[1] or ''
+  end)
+  restore_path()
+  local cwd, argv = line:match '^(.-)|(.*)$'
+  if not cwd then return false end
+  return vim.uv.fs_realpath(cwd) == vim.uv.fs_realpath(ios) and argv == ('config -workspace %s -scheme App'):format(workspace)
+end)
+
+-- A successful build must feed sourcekit: `parse -a` (merge -- a plain parse
+-- of an incremental log would wipe the accumulated flags) on the plugin's own
+-- build log, run from the directory holding buildServer.json. A failed build
+-- must feed it nothing.
+check('xcode.build_server_harvests_flags_after_a_build', function()
+  local record, restore_path = fake_build_server()
+  local root = vim.fn.tempname()
+  local ios = vim.fs.joinpath(root, 'ios')
+  vim.fn.mkdir(ios, 'p')
+  vim.fn.writefile({ '{"kind":"manual"}' }, vim.fs.joinpath(ios, 'buildServer.json'))
+  local log = vim.fs.joinpath(root, 'xcodebuild.log')
+  vim.fn.writefile({ 'CompileSwiftSources' }, log)
+  local appdata = require 'xcodebuild.project.appdata'
+  local saved_log = appdata.build_logs_filepath
+  appdata.build_logs_filepath = log
+  local calls
+  with_project_settings({ projectFile = vim.fs.joinpath(ios, 'App.xcodeproj'), scheme = 'App', workingDirectory = ios }, function()
+    vim.api.nvim_exec_autocmds('User', { pattern = 'XcodebuildBuildFinished', data = { success = false } })
+    vim.wait(300)
+    assert(vim.fn.filereadable(record) == 0, 'a FAILED build was harvested')
+    vim.api.nvim_exec_autocmds('User', { pattern = 'XcodebuildBuildFinished', data = { success = true } })
+    vim.wait(5000, function() return vim.fn.filereadable(record) == 1 end, 50)
+    calls = vim.fn.filereadable(record) == 1 and vim.fn.readfile(record) or {}
+  end)
+  appdata.build_logs_filepath = saved_log
+  restore_path()
+  if #calls ~= 1 then return false end
+  local cwd, argv = calls[1]:match '^(.-)|(.*)$'
+  return vim.uv.fs_realpath(cwd) == vim.uv.fs_realpath(ios) and argv == 'parse -a ' .. log
+end)
+
+-- The per-worktree failure mode this subsection exists for: a Swift buffer
+-- inside an Xcode project with no buildServer.json anywhere upward. With no
+-- scheme saved there is nothing to bind automatically, so the nudge must name
+-- the next key -- once per project, not per buffer -- and must stay quiet
+-- entirely once a binding exists.
+check('xcode.unbound_swift_buffer_nudges_toward_setup', function()
+  local record, restore_path = fake_build_server()
+  local root = vim.fn.tempname()
+  vim.fn.mkdir(vim.fs.joinpath(root, 'App.xcodeproj'), 'p')
+  vim.fn.writefile({ 'import Foundation' }, vim.fs.joinpath(root, 'A.swift'))
+  vim.fn.writefile({ 'import Foundation' }, vim.fs.joinpath(root, 'B.swift'))
+  local nudges = 0
+  local previous_notify = vim.notify
+  -- Counted by content: opening a Swift buffer fires unrelated notifiers too
+  -- (debugger, lint), and any of those would inflate a raw count.
+  vim.notify = function(message)
+    if tostring(message):match '<leader>xs' then nudges = nudges + 1 end
+  end
+  local after_first, after_second, after_bound
+  with_project_settings({}, function()
+    vim.cmd.edit(vim.fs.joinpath(root, 'A.swift'))
+    after_first = nudges
+    vim.cmd.edit(vim.fs.joinpath(root, 'B.swift'))
+    after_second = nudges
+    local bound_root = vim.fn.tempname()
+    vim.fn.mkdir(vim.fs.joinpath(bound_root, 'App.xcodeproj'), 'p')
+    vim.fn.writefile({ '{}' }, vim.fs.joinpath(bound_root, 'buildServer.json'))
+    vim.fn.writefile({ 'import Foundation' }, vim.fs.joinpath(bound_root, 'C.swift'))
+    vim.cmd.edit(vim.fs.joinpath(bound_root, 'C.swift'))
+    after_bound = nudges
+  end)
+  vim.notify = previous_notify
+  restore_path()
+  return after_first == 1 and after_second == 1 and after_bound == 1 and vim.fn.filereadable(record) == 0
+end)
+
 -- Drive the formatter and the linter for real. Asserting `formatters_by_ft` and
 -- `linters_by_ft` alone would stay green with the autocmd that fires them, or
 -- the tool itself, entirely gone.

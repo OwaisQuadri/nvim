@@ -2781,6 +2781,15 @@ if is_mac then
       search_in_parent_dirs = true,
       reload_on_cwd_change = true,
     },
+    -- The plugin's own integration spawns `xcode-build-server config` from
+    -- nvim's cwd, and `config` writes buildServer.json to the cwd -- launch
+    -- nvim from a Flutter repo's root and the binding lands OUTSIDE ios/,
+    -- where a second, stale copy then shadows the real one. Disabled in
+    -- favour of the [[ sourcekit build server ]] hooks below, which pin every
+    -- spawn to the project file's directory.
+    integrations = {
+      xcode_build_server = { enabled = false },
+    },
   }
 
   local function map(keys, action, desc, mode) vim.keymap.set(mode or 'n', keys, action, { desc = desc }) end
@@ -2902,6 +2911,107 @@ if is_mac then
     end,
   })
   map('<leader>xL', function() require('lint').try_lint 'swiftlint' end, 'Xcode: run Swift[L]int now')
+
+  -- [[ sourcekit build server ]]
+  -- An .xcodeproj tells sourcekit-lsp nothing by itself. The LSP needs two
+  -- machine-specific, gitignored artifacts next to the project file: a
+  -- `buildServer.json` binding it to xcode-build-server, and a `.compile` of
+  -- per-file compile flags. Without them it still attaches -- and then answers
+  -- every request with nothing, which reads as "LSP is dead" with no error
+  -- anywhere. Because both artifacts are per-checkout, every fresh clone or
+  -- worktree starts in that state. The three hooks below make a checkout
+  -- self-healing: picking a scheme (re)binds, every successful build harvests
+  -- flags, and an unbound Swift buffer says which step is missing.
+  local build_server_group = vim.api.nvim_create_augroup('xcode-build-server', { clear = true })
+
+  ---@param from string directory to search upward from
+  ---@return string|nil root directory containing buildServer.json
+  local function build_server_root(from)
+    local found = vim.fs.find('buildServer.json', { path = from, upward = true })[1]
+    return found and vim.fs.dirname(found) or nil
+  end
+
+  ---@param is_announced boolean notify with the next step once bound
+  ---@return boolean whether a bind was attempted
+  local function bind_build_server(is_announced)
+    if vim.fn.executable 'xcode-build-server' == 0 then return false end
+    local settings = require('xcodebuild.project.config').settings
+    if not (settings.projectFile and settings.scheme and settings.workingDirectory) then return false end
+    local flag = settings.projectFile:match '%.xcodeproj$' and '-project' or '-workspace'
+    local scheme = settings.scheme
+    vim.system(
+      { 'xcode-build-server', 'config', flag, settings.projectFile, '-scheme', scheme },
+      { cwd = settings.workingDirectory },
+      vim.schedule_wrap(function(out)
+        if out.code ~= 0 then return end
+        require('xcodebuild.integrations.lsp').restart_sourcekit_lsp()
+        if is_announced then vim.notify(('sourcekit bound to scheme %s -- one build (<leader>xb) feeds it flags'):format(scheme), vim.log.levels.INFO) end
+      end)
+    )
+    return true
+  end
+
+  vim.api.nvim_create_autocmd('User', {
+    pattern = 'XcodebuildProjectSettingsUpdated',
+    group = build_server_group,
+    desc = 'Rebind the sourcekit build server on scheme change',
+    callback = function() bind_build_server(false) end,
+  })
+
+  -- `parse -a`, never plain `parse`: plain REPLACES `.compile`, so an
+  -- incremental build -- which logs only what it recompiled, possibly nothing
+  -- -- would wipe the accumulated flags. `-a` merges by file, so coverage only
+  -- grows: targets and schemes accumulate across builds. It also resets `kind`
+  -- to "manual" in buildServer.json, which is load-bearing: `config` above
+  -- (re)binds with kind "xcode", a mode whose flags come from Xcode.app's own
+  -- build logs -- logs a build from this editor never writes. The running
+  -- server watches `.compile`'s mtime, so new flags land with no LSP restart.
+  vim.api.nvim_create_autocmd('User', {
+    pattern = 'XcodebuildBuildFinished',
+    group = build_server_group,
+    desc = 'Harvest sourcekit compile flags from the finished build',
+    callback = function(event)
+      if not (event.data and event.data.success) then return end
+      if vim.fn.executable 'xcode-build-server' == 0 then return end
+      local settings = require('xcodebuild.project.config').settings
+      local root = build_server_root(settings.workingDirectory or vim.fn.getcwd())
+      local log = require('xcodebuild.project.appdata').build_logs_filepath
+      if not root or vim.fn.filereadable(log) == 0 then return end
+      local is_first_flags = not vim.uv.fs_stat(vim.fs.joinpath(root, '.compile'))
+      vim.system(
+        { 'xcode-build-server', 'parse', '-a', log },
+        { cwd = root },
+        vim.schedule_wrap(function(out)
+          if out.code == 0 and is_first_flags then vim.notify('sourcekit: compile flags harvested', vim.log.levels.INFO) end
+        end)
+      )
+    end,
+  })
+
+  local nudged = {}
+  vim.api.nvim_create_autocmd('FileType', {
+    pattern = 'swift',
+    group = build_server_group,
+    desc = 'Bind or nudge when a Swift buffer has no build server',
+    callback = function(event)
+      local name = vim.api.nvim_buf_get_name(event.buf)
+      if name == '' or name:match '%.swiftinterface$' then return end
+      local dir = vim.fs.dirname(name)
+      if build_server_root(dir) then return end
+      -- SwiftPM packages and bare files serve their own flags; only an Xcode
+      -- project is helpless without the binding.
+      local project = vim.fs.find(
+        function(n) return n:match '%.xcodeproj$' ~= nil or n:match '%.xcworkspace$' ~= nil end,
+        { path = dir, upward = true, type = 'directory' }
+      )[1]
+      if not project or vim.fn.executable 'xcode-build-server' == 0 then return end
+      if bind_build_server(true) then return end
+      local project_dir = vim.fs.dirname(project)
+      if nudged[project_dir] then return end
+      nudged[project_dir] = true
+      vim.notify('sourcekit has no build server here -- <leader>xs binds a scheme, then a build (<leader>xb) feeds it flags', vim.log.levels.WARN)
+    end,
+  })
 end
 
 -- ============================================================
@@ -3662,14 +3772,14 @@ do
         local flags = compile_flags_path(dir)
         if not flags then
           local fix = vim.fn.executable 'xcode-build-server' == 0 and 'Start with: brew install xcode-build-server'
-            or ('Run: cd %s && xcode-build-server config -workspace Runner.xcworkspace -scheme Runner'):format(platform)
+            or ('Bind it: <leader>xs picks a scheme (or: cd %s && xcode-build-server config -workspace Runner.xcworkspace -scheme Runner)'):format(platform)
           table.insert(notes, ('! %s/ Swift shows phantom errors ("No such module \'Flutter\'"). %s'):format(platform, fix))
         elseif vim.uv.fs_stat(flags) then
           table.insert(notes, ('ok %s/ has compile flags'):format(platform))
         else
           table.insert(
             notes,
-            ('! %s/ build server is bound but has no flags yet -- needs one CLEAN build to harvest them (see the README recipe)'):format(platform)
+            ('! %s/ build server is bound but has no flags yet -- one build (<leader>xb) harvests them, or see the README recipe for a terminal build'):format(platform)
           )
         end
       end
