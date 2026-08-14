@@ -43,6 +43,10 @@
       "src": "https://github.com/ThePrimeagen/harpoon",
       "version": "'harpoon2'"
     },
+    "llama.vim": {
+      "rev": "87c4ce8934258f284d460ffe15067f214e6c84b7",
+      "src": "https://github.com/ggml-org/llama.vim"
+    },
     "mason-lspconfig.nvim": {
       "rev": "47059d71b42d74b0a1e9f61c1d99d301039c3b5b",
       "src": "https://github.com/mason-org/mason-lspconfig.nvim"
