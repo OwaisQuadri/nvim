@@ -97,7 +97,6 @@ non-zero if any fail, so it works as a pre-merge gate:
 
 **Completion**
 - `blink.cmp`, `LuaSnip` — autocomplete + snippets; docs pane auto-shows, buffer-word fallback when no language server is attached, treesitter-colored labels
-- `llama.vim` — Cursor-style AI ghost text from a fully local llama.cpp server (Qwen2.5-Coder-3B, fill-in-the-middle): no account, no revocable free tier, code never leaves the machine. Needs `brew install llama.cpp`; the server auto-starts detached on first insert (see [AI ghost text](#ai-ghost-text-llamavim-local)); `<leader>ta` toggles suggestions
 
 **Treesitter**
 - `nvim-treesitter` — parsers for bash, c, diff, html, lua, luadoc, markdown(+inline), query, vim, vimdoc, swift, dart, javascript, typescript, tsx, json, yaml, rust, toml
@@ -178,26 +177,6 @@ so these write to the real system clipboard.
 | `<leader>tm` | Toggle markdown render (on by default in markdown buffers) |
 | `<leader>tc` | Toggle sticky scope context (on by default) |
 | `<leader>tH` | Toggle hardtime habit coach (on by default) |
-| `<leader>ta` | Toggle AI ghost text (on by default) |
-
-### AI ghost text (llama.vim, local)
-
-Fully local fill-in-the-middle completion via llama.cpp — no account, and no
-free tier anyone can revoke. The model server starts itself in the background
-on the first insert if nothing is answering on port 8012 (`:LlamaServer` does
-the same by hand; a first-ever run downloads Qwen2.5-Coder-3B, ~2GB). It runs
-detached, so it survives quitting nvim — one spawn per boot, no window to
-babysit. `Tab` accepts, but only when a suggestion is showing — otherwise it
-falls through to blink.cmp's snippet-jump and then to a normal tab, so
-nothing else loses the key. The Alt chords work everywhere regardless.
-
-| Key (insert mode) | Action |
-|---|---|
-| `Tab` / `Alt-f` | Accept the whole suggestion |
-| `Alt-w` | Accept one word |
-| `Alt-a` | Accept one line |
-| `Alt-e` / `Alt-r` | Cycle to next / previous suggestion |
-| `Ctrl-F` | Manually (re)trigger a suggestion |
 
 ### Git hunks (`<leader>h*`, via gitsigns)
 
