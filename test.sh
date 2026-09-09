@@ -2055,4 +2055,19 @@ else
   report lsp.rename_current_buffer_is_autosaved_as_readme_says false
 fi
 
+llama_removal_probe="$(nvim --headless -u init.lua -l /dev/stdin 2>&1 <<'PROBE'
+assert(vim.fn.exists ':LlamaServer' == 0, ':LlamaServer still exists')
+assert(vim.fn.maparg('<leader>ta', 'n') == '', '<leader>ta still has a mapping')
+assert(vim.g.llama_config == nil, 'llama configuration still loads')
+vim.api.nvim_exec_autocmds('InsertEnter', {})
+assert(vim.fn.exists('*llama#fim_accept') == 0, 'llama.vim still loads on insert')
+assert(not vim.o.runtimepath:find('llama%.vim'), 'llama.vim remains on the runtime path')
+PROBE
+)"
+if [ $? -eq 0 ]; then
+  report completion.local_llama_server_is_removed true
+else
+  report completion.local_llama_server_is_removed false "$llama_removal_probe"
+fi
+
 exit $([ "$failures" -eq 0 ] && echo 0 || echo 1)
