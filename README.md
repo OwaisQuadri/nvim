@@ -71,7 +71,7 @@ non-zero if any fail, so it works as a pre-merge gate:
 - `guess-indent.nvim` — auto-detect file indentation (overrides the 4-space, spaces-only default when a file disagrees; `.editorconfig` and modelines override too)
 - `gitsigns.nvim` — git gutter signs + hunk stage/reset/preview/nav
 - `which-key.nvim` — shows pending keybinds as you type them
-- `rose-pine/neovim` — colorscheme
+- `lunacookies/vim-colors-xcode` — colorscheme (`xcodedark`, Xcode's Default (Dark) palette)
 - `todo-comments.nvim` — highlights TODO/NOTE/etc in comments
 - `mini.nvim` — grab-bag: `mini.ai` (textobjects), `mini.surround`, `mini.statusline`
 
@@ -93,7 +93,7 @@ non-zero if any fail, so it works as a pre-merge gate:
 - `xcodebuild.nvim` (macOS only) — build, run, test, debug, and manage an iOS/macOS/Swift-package project without opening Xcode: scheme and device pickers, test explorer, code coverage, log parsing
 - `flutter-tools.nvim` — `dartls`, device/emulator pickers, hot reload, widget guides, the widget outline, and the Dart debugger
 - React Native / Expo has no build/run plugin — it's `ts_ls` + `eslint` + `prettier` + `nvim-ts-autotag` for the code, and the mobile lane shells out to `npx expo` for the dev loop
-- `nvim-dap`, `nvim-dap-ui` (+ `nvim-nio`) — the debugger, shared by the Swift lane (via Xcode's `lldb-dap`) and the Flutter lane
+- `nvim-dap`, `nvim-dap-ui` (+ `nvim-nio`) — the debugger, shared by the Swift lane (via `lldb-dap` from Xcode on macOS, or from the swiftly toolchain on Linux) and the Flutter lane
 
 **Completion**
 - `blink.cmp`, `LuaSnip` — autocomplete + snippets; docs pane auto-shows, buffer-word fallback when no language server is attached, treesitter-colored labels
