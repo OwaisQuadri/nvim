@@ -871,7 +871,7 @@ do
   -- bold and colored instead, and keep it that way across colorscheme changes.
   local function make_filename_prominent()
     vim.api.nvim_set_hl(0, 'MiniStatuslineFilename', { link = 'Title', default = false })
-    vim.api.nvim_set_hl(0, 'MiniStatuslineFilenameBase', { link = 'Boolean', default = false })
+    vim.api.nvim_set_hl(0, 'MiniStatuslineFilenameBase', { link = 'Directory', default = false })
   end
   vim.api.nvim_create_autocmd('ColorScheme', { desc = 'Keep the statusline filename prominent', callback = make_filename_prominent })
   make_filename_prominent()
@@ -1926,7 +1926,13 @@ do
   -- besides. nvim-lspconfig's default `cmd = { 'rust-analyzer' }` finds the
   -- rustup binary as-is (check with `which rust-analyzer`; install with
   -- `rustup component add rust-analyzer`).
-  vim.lsp.config('rust_analyzer', {})
+  -- Arch's `rustup` package does NOT put a rust-analyzer proxy in /usr/bin (only
+  -- cargo/rustc/etc.); it lives in /usr/lib/rustup/bin, which isn't on PATH. Use it
+  -- directly when present, so we never fall back to a stray mason copy or nothing.
+  local rustup_ra = '/usr/lib/rustup/bin/rust-analyzer'
+  vim.lsp.config('rust_analyzer', {
+    cmd = { vim.fn.executable(rustup_ra) == 1 and rustup_ra or 'rust-analyzer' },
+  })
   vim.lsp.enable('rust_analyzer')
 end
 
