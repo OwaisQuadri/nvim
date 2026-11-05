@@ -725,25 +725,10 @@ do
   -- vim.pack.add { gh 'rose-pine/neovim' }
 
   -- Load the colorscheme here.
-  -- 'hackerman' is our own theme, published at github.com/OwaisQuadri/hackerman.nvim.
-  vim.pack.add { gh 'OwaisQuadri/hackerman.nvim' }
-  vim.cmd.colorscheme 'hackerman'
-
-  -- Pull new commits from the theme's repo at most once a day, so pushing a
-  -- change there doesn't require remembering to run `vim.pack.update()` by
-  -- hand. Deferred so a slow/offline git fetch never blocks startup, and it
-  -- only takes effect on the *next* restart (this session already loaded the
-  -- colorscheme by the time the update lands).
-  do
-    vim.fn.mkdir(vim.fn.stdpath 'data', 'p')
-    local stamp_file = vim.fn.stdpath 'data' .. '/hackerman-last-update'
-    local ok, lines = pcall(vim.fn.readfile, stamp_file)
-    local last_update = ok and tonumber(lines[1])
-    if not last_update or (os.time() - last_update) > 86400 then
-      pcall(vim.fn.writefile, { tostring(os.time()) }, stamp_file)
-      vim.defer_fn(function() pcall(vim.pack.update, { 'hackerman.nvim' }, { force = true }) end, 500)
-    end
-  end
+  -- Xcode's own "Default (Dark)" palette, ported to Vim by lunacookies -- same
+  -- colors in nvim as in Xcode, so switching between the two is seamless.
+  vim.pack.add { gh 'lunacookies/vim-colors-xcode' }
+  vim.cmd.colorscheme 'xcodedark'
 
   -- Transparent background, colorscheme-agnostic: clears the background on
   -- every `:colorscheme` change (including this one, since ColorScheme has
@@ -1924,7 +1909,13 @@ do
   -- through mason-tool-installer's `ensure_installed`. nvim-lspconfig's default
   -- `cmd = { 'sourcekit-lsp' }` works as-is as long as Xcode's command line tools are
   -- installed (check with `which sourcekit-lsp`).
-  vim.lsp.config('sourcekit', {})
+  -- On Linux it comes from the swiftly toolchain instead. swiftly's bin dir is only
+  -- on PATH once its env.sh is sourced, so a nvim started outside that shell would
+  -- silently get no Swift LSP -- fall back to the bin dir directly.
+  local swiftly_sourcekit = vim.fn.expand '~/.local/share/swiftly/bin/sourcekit-lsp'
+  local sourcekit_cmd = 'sourcekit-lsp'
+  if vim.fn.executable(sourcekit_cmd) == 0 and vim.fn.executable(swiftly_sourcekit) == 1 then sourcekit_cmd = swiftly_sourcekit end
+  vim.lsp.config('sourcekit', { cmd = { sourcekit_cmd } })
   vim.lsp.enable('sourcekit')
 
   -- Rust, via rustup's own rust-analyzer, is also outside the mason table, and
@@ -2925,6 +2916,65 @@ if is_mac then
       vim.notify('sourcekit has no build server here -- <leader>xs binds a scheme, then a build (<leader>xb) feeds it flags', vim.log.levels.WARN)
     end,
   })
+end
+
+-- [[ Swift debugger on Linux ]]
+-- The Xcode lane above is Mac-only. On Linux, follow swift.org's
+-- "Configuring Neovim for Swift Development": lldb-dap from the Swift toolchain
+-- (swiftly), not the distro's LLVM lldb-dap, which can't read Swift types.
+-- Same <leader>d keys as the Mac lane, so muscle memory carries across machines.
+if not is_mac then
+  local function find_lldb_dap()
+    for _, path in ipairs { 'lldb-dap', vim.fn.expand '~/.local/share/swiftly/bin/lldb-dap' } do
+      if vim.fn.executable(path) == 1 then return vim.fn.exepath(path) end
+    end
+  end
+
+  local swift_dap_ready = false
+  local function swift_dap()
+    local dap = ensure_debugger()
+    if swift_dap_ready then return dap end
+    local lldb_dap = find_lldb_dap()
+    if not lldb_dap then
+      vim.notify('lldb-dap not found -- install the Swift toolchain with swiftly', vim.log.levels.WARN)
+      return dap
+    end
+    dap.adapters['lldb-dap'] = { type = 'executable', command = lldb_dap, name = 'lldb-dap' }
+    local function pick_program() return vim.fn.input('Executable: ', vim.fn.getcwd() .. '/.build/debug/', 'file') end
+    dap.configurations.swift = {
+      { name = 'Launch', type = 'lldb-dap', request = 'launch', program = pick_program, cwd = '${workspaceFolder}', stopOnEntry = false },
+      {
+        name = 'Launch with arguments',
+        type = 'lldb-dap',
+        request = 'launch',
+        program = pick_program,
+        cwd = '${workspaceFolder}',
+        stopOnEntry = false,
+        args = function() return vim.split(vim.fn.input 'Arguments: ', ' ', { trimempty = true }) end,
+      },
+      { name = 'Attach to process', type = 'lldb-dap', request = 'attach', pid = function() return require('dap.utils').pick_process() end },
+    }
+    swift_dap_ready = true
+    return dap
+  end
+
+  local function map(keys, action, desc) vim.keymap.set('n', keys, action, { desc = desc }) end
+  map('<leader>dd', function()
+    -- `swift build` first so the picker defaults to a fresh .build/debug binary.
+    vim.notify('swift build...', vim.log.levels.INFO)
+    vim.system({ 'swift', 'build' }, { text = true }, vim.schedule_wrap(function(out)
+      if out.code ~= 0 then
+        vim.notify('swift build failed:\n' .. (out.stderr or ''), vim.log.levels.ERROR)
+        return
+      end
+      swift_dap().continue()
+    end))
+  end, '[D]ebug: build & debug')
+  map('<leader>dr', function() swift_dap().continue() end, '[D]ebug: [R]un without building')
+  map('<leader>db', function() swift_dap().toggle_breakpoint() end, '[D]ebug: toggle [B]reakpoint')
+  map('<leader>dB', function() swift_dap().set_breakpoint(vim.fn.input 'Breakpoint condition: ') end, '[D]ebug: conditional [B]reakpoint')
+  map('<leader>dC', function() swift_dap().run_to_cursor() end, '[D]ebug: run to [C]ursor')
+  map('<leader>dx', function() swift_dap().terminate() end, '[D]ebug: terminate session')
 end
 
 -- ============================================================
