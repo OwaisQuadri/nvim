@@ -461,6 +461,7 @@ do
   --
   -- See `:help vim.pack-events`
   vim.api.nvim_create_autocmd('PackChanged', {
+    group = vim.api.nvim_create_augroup('config-plugin-builds', { clear = true }),
     callback = function(ev)
       local name = ev.data.spec.name
       local kind = ev.data.kind
@@ -745,7 +746,11 @@ do
       vim.api.nvim_set_hl(0, group, { bg = 'none' })
     end
   end
-  vim.api.nvim_create_autocmd('ColorScheme', { desc = 'Keep the background transparent on any colorscheme', callback = clear_bg })
+  vim.api.nvim_create_autocmd('ColorScheme', {
+    group = vim.api.nvim_create_augroup('config-transparency', { clear = true }),
+    desc = 'Keep the background transparent on any colorscheme',
+    callback = clear_bg,
+  })
   clear_bg()
 
   -- Highlight todo, notes, etc in comments
@@ -873,7 +878,11 @@ do
     vim.api.nvim_set_hl(0, 'MiniStatuslineFilename', { link = 'Title', default = false })
     vim.api.nvim_set_hl(0, 'MiniStatuslineFilenameBase', { link = 'Directory', default = false })
   end
-  vim.api.nvim_create_autocmd('ColorScheme', { desc = 'Keep the statusline filename prominent', callback = make_filename_prominent })
+  vim.api.nvim_create_autocmd('ColorScheme', {
+    group = vim.api.nvim_create_augroup('config-statusline', { clear = true }),
+    desc = 'Keep the statusline filename prominent',
+    callback = make_filename_prominent,
+  })
   make_filename_prominent()
 
   -- Split the filename section so the actual filename (the last path
@@ -1623,6 +1632,7 @@ do
   -- Gutter lightbulb marking where a code action exists. First LspAttach
   -- loads it: no server, no startup cost.
   vim.api.nvim_create_autocmd('LspAttach', {
+    group = vim.api.nvim_create_augroup('config-lightbulb', { clear = true }),
     desc = 'Load nvim-lightbulb once a language server attaches',
     once = true,
     callback = function()
@@ -1828,8 +1838,6 @@ do
     -- is inert in a repo that doesn't lint. Nothing to configure here.
     eslint = {},
 
-    stylua = {}, -- Used to format Lua code
-
     -- Special Lua Config, as recommended by neovim help docs
     lua_ls = {
       on_init = function(client)
@@ -1886,6 +1894,7 @@ do
   vim.list_extend(ensure_installed, {
     -- You can add other tools here that you want Mason to install
     'prettier',
+    'stylua',
   })
 
   -- SwiftFormat (SECTION 7) and SwiftLint (SECTION 22) are published as prebuilt
@@ -1944,7 +1953,7 @@ do
   -- [[ Formatting ]]
   vim.pack.add { gh 'stevearc/conform.nvim' }
   require('conform').setup {
-    notify_on_error = false,
+    notify_on_error = true,
     format_on_save = function(bufnr)
       -- You can specify filetypes to autoformat on save here:
       local enabled_filetypes = {
@@ -1970,6 +1979,7 @@ do
       --
       -- You can use 'stop_after_first' to run the first available formatter from the list
       -- javascript = { "prettierd", "prettier", stop_after_first = true },
+      lua = { 'stylua' },
       javascript = { 'prettier' },
       javascriptreact = { 'prettier' },
       typescript = { 'prettier' },
@@ -2217,6 +2227,7 @@ do
 
   local available_parsers = require('nvim-treesitter').get_available()
   vim.api.nvim_create_autocmd('FileType', {
+    group = vim.api.nvim_create_augroup('config-treesitter', { clear = true }),
     callback = function(args)
       local buf, filetype = args.buf, args.match
 
@@ -2364,6 +2375,7 @@ do
   vim.keymap.set('n', '<C-[>', '<C-o>zz', { desc = 'Back in jump history' })
   vim.keymap.set('n', '<C-]>', '<C-i>zz', { desc = 'Forward in jump history' })
   vim.api.nvim_create_autocmd('FileType', {
+    group = vim.api.nvim_create_augroup('config-help-navigation', { clear = true }),
     desc = 'Keep native <C-]> tag-follow in help buffers',
     pattern = 'help',
     callback = function(ev) vim.keymap.set('n', '<C-]>', '<C-]>', { buffer = ev.buf, desc = 'Follow help link (native tag jump)' }) end,
@@ -2456,6 +2468,7 @@ do
   -- fight it or silently overwrite it.
   vim.o.autoread = true
   vim.api.nvim_create_autocmd({ 'FocusLost', 'BufLeave', 'InsertLeave' }, {
+    group = vim.api.nvim_create_augroup('config-autosave', { clear = true }),
     desc = 'Autosave modified buffers (no-op if nothing changed)',
     pattern = '*',
     command = 'silent! update',

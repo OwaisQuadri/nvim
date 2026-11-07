@@ -2070,4 +2070,36 @@ else
   report completion.local_llama_server_is_removed false "$llama_removal_probe"
 fi
 
+reload_probe="$(nvim --headless -u init.lua -i NONE -l /dev/stdin 2>&1 <<'PROBE'
+local events = { 'FileType', 'LspAttach', 'InsertLeave', 'ColorScheme', 'PackChanged' }
+local counts = {}
+for _, event in ipairs(events) do
+  counts[event] = #vim.api.nvim_get_autocmds { event = event }
+end
+dofile(vim.env.MYVIMRC)
+for _, event in ipairs(events) do
+  assert(#vim.api.nvim_get_autocmds { event = event } == counts[event], event .. ' handlers changed after reload')
+end
+PROBE
+)"
+if [ $? -eq 0 ]; then
+  report config.reload_preserves_handler_counts true
+else
+  report config.reload_preserves_handler_counts false "$reload_probe"
+fi
+
+lua_format_probe="$(nvim --headless -u init.lua -i NONE -l /dev/stdin 2>&1 <<'PROBE'
+vim.bo.filetype = 'lua'
+vim.api.nvim_buf_set_lines(0, 0, -1, false, { 'local x={a=1}' })
+local formatted = require('conform').format { async = false, lsp_format = 'never' }
+assert(formatted, 'Lua formatting failed')
+assert(vim.api.nvim_get_current_line() == 'local x = { a = 1 }', 'StyLua did not format the buffer')
+PROBE
+)"
+if [ $? -eq 0 ]; then
+  report formatting.lua_uses_stylua true
+else
+  report formatting.lua_uses_stylua false "$lua_format_probe"
+fi
+
 exit $([ "$failures" -eq 0 ] && echo 0 || echo 1)
