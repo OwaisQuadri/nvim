@@ -2862,11 +2862,17 @@ if is_mac then
     if not (settings.projectFile and settings.scheme and settings.workingDirectory) then return false end
     local flag = settings.projectFile:match '%.xcodeproj$' and '-project' or '-workspace'
     local scheme = settings.scheme
+    local command = { 'xcode-build-server', 'config', flag, settings.projectFile, '-scheme', scheme }
+    local derived_data = require('xcodebuild.core.xcode').find_derived_data_path(settings.productName or scheme, settings.projectFile)
+    if derived_data then vim.list_extend(command, { '--build_root', derived_data }) end
     vim.system(
-      { 'xcode-build-server', 'config', flag, settings.projectFile, '-scheme', scheme },
+      command,
       { cwd = settings.workingDirectory },
       vim.schedule_wrap(function(out)
-        if out.code ~= 0 then return end
+        if out.code ~= 0 then
+          vim.notify('Build-server configuration failed: ' .. (out.stderr or out.stdout or ''), vim.log.levels.ERROR)
+          return
+        end
         require('xcodebuild.integrations.lsp').restart_sourcekit_lsp()
         if is_announced then vim.notify(('sourcekit bound to scheme %s -- one build (<leader>xb) feeds it flags'):format(scheme), vim.log.levels.INFO) end
       end)
@@ -2905,7 +2911,11 @@ if is_mac then
         { 'xcode-build-server', 'parse', '-a', log },
         { cwd = root },
         vim.schedule_wrap(function(out)
-          if out.code == 0 and is_first_flags then vim.notify('sourcekit: compile flags harvested', vim.log.levels.INFO) end
+          if out.code ~= 0 then
+            vim.notify('Build-server flag import failed: ' .. (out.stderr or out.stdout or ''), vim.log.levels.ERROR)
+          elseif is_first_flags then
+            vim.notify('sourcekit: compile flags harvested', vim.log.levels.INFO)
+          end
         end)
       )
     end,
