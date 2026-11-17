@@ -42,6 +42,18 @@ Inline diagnostics and code actions remain enabled. The quick-action shortcut wo
 
 Definition navigation uses the language server without an upstream-source fallback. Hover uses the standard `K` command. `:SwiftSource` explicitly browses upstream Swift implementations; those sources can differ from the frameworks shipped with the selected Xcode version.
 
+## Markdown preview
+
+Option+P (`<M-p>`) previews the entire focused buffer, including unsaved Markdown and MDX. No `.md` extension is required. For hover documentation, press `K`, enter the documentation float (usually press `K` again), then Option+P. Untyped documentation floats must contain recognizable Markdown and prose. Code, terminal output, empty buffers, and other unsuitable buffers produce a notice instead.
+
+Install [jtnk/tmd v0.2.0](https://github.com/jtnk/tmd) on `PATH` or at `~/.local/bin/tmd`. Inside Herdr, the wrapper creates its own pane next to the originating `HERDR_PANE_ID` and zooms it as an overlay. Outside Herdr, it opens a separate Ghostty.app window on macOS. It never uses Neovim's embedded terminal. The terminal must deliver Option+P as Meta+P.
+
+Press **Ctrl+Q** in tmd to quit and return to editing. The wrapper removes its snapshot and restores the originating Herdr pane and zoom state without closing other panes. Repeated Option+P reuses the existing snapshot rather than opening duplicates; quit it before previewing new edits. Temporary data is also cleaned up on launch failure, terminal close, and normal Neovim exit.
+
+The source buffer, selection, mode, and files are not changed. Relative images and links resolve from the source file's directory, or Neovim's working directory for unnamed buffers. Documentation floats have no source-file base to recover. MDX is shown as Markdown, not executed as React. The mapping is offered in normal, insert, visual/select, operator-pending, command-line, and terminal modes without replacing existing mappings. Terminal buffers still receive the unsupported-buffer notice.
+
+The implementation lives in [`lua/config/tmd_preview.lua`](lua/config/tmd_preview.lua).
+
 ## App commands
 
 The Control run/build mappings are defined at the end of [`init.lua`](init.lua). They resolve the nearest supported project above the current file:
