@@ -38,7 +38,7 @@ Saving is explicit. Save-all remains available. A language-server rename saves f
 
 ## Diagnostics and navigation
 
-Press Space `c a` in normal or visual mode to show code actions for the current line or selection. Control+Period remains available, including in insert mode. Rust-analyzer runs `cargo clippy` on save. Install the Clippy component for the project's Rust toolchain. When Clippy provides an edit, the code-action menu can offer it as a fix. Diagnostic copying and cross-file diagnostic navigation remain available. The diagnostic-list shortcut opens a location list, not a quickfix list.
+Press Space `c a` to show code actions for the current line or a characterwise or linewise visual selection. Control+Period remains available, including in insert mode. Rust-analyzer runs `cargo clippy` on save. Install the Clippy component for the project's Rust toolchain. When Clippy provides an edit, the code-action menu can offer it as a fix. Diagnostic copying and cross-file diagnostic navigation remain available. The diagnostic-list shortcut opens a location list, not a quickfix list.
 
 Definition navigation uses the language server without an upstream-source fallback. Hover uses the standard `K` command. `:SwiftSource` explicitly browses upstream Swift implementations; those sources can differ from the frameworks shipped with the selected Xcode version.
 
