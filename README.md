@@ -38,19 +38,19 @@ Saving is explicit. Save-all remains available. A language-server rename saves f
 
 ## Diagnostics and navigation
 
-Inline diagnostics and code actions remain enabled. The quick-action shortcut works in normal, visual, and insert modes. Swift actions use a diagnostic position; other languages use the line or explicit selection. Diagnostic copying and cross-file diagnostic navigation remain available. The diagnostic-list shortcut opens a location list, not a quickfix list.
+Press Space `c a` in normal or visual mode to show code actions for the current line or selection. Control+Period remains available, including in insert mode. Rust-analyzer runs `cargo clippy` on save. Install the Clippy component for the project's Rust toolchain. When Clippy provides an edit, the code-action menu can offer it as a fix. Diagnostic copying and cross-file diagnostic navigation remain available. The diagnostic-list shortcut opens a location list, not a quickfix list.
 
 Definition navigation uses the language server without an upstream-source fallback. Hover uses the standard `K` command. `:SwiftSource` explicitly browses upstream Swift implementations; those sources can differ from the frameworks shipped with the selected Xcode version.
 
 ## Markdown preview
 
-Option+P (`<M-p>`) previews the entire focused buffer, including unsaved Markdown and MDX. No `.md` extension is required. For hover documentation, press `K`, enter the documentation float (usually press `K` again), then Option+P. Untyped documentation floats must contain recognizable Markdown and prose. Code, terminal output, empty buffers, and other unsuitable buffers produce a notice instead.
+In normal mode, press Space `m p` to preview the entire focused buffer, including unsaved Markdown and MDX. No `.md` extension is required. For hover documentation, press `K`, enter the documentation float (usually press `K` again), then press Space `m p`. Untyped documentation floats must contain recognizable Markdown and prose. Code, terminal output, empty buffers, and other unsuitable buffers produce a notice instead.
 
-Install [jtnk/tmd v0.2.0](https://github.com/jtnk/tmd) on `PATH` or at `~/.local/bin/tmd`. Inside Herdr, the wrapper creates its own pane next to the originating `HERDR_PANE_ID` and zooms it as an overlay. Outside Herdr, it opens a separate Ghostty.app window on macOS. It never uses Neovim's embedded terminal. The terminal must deliver Option+P as Meta+P.
+Install [jtnk/tmd v0.2.0](https://github.com/jtnk/tmd) on `PATH` or at `~/.local/bin/tmd`. Inside Herdr, the wrapper creates its own pane next to the originating `HERDR_PANE_ID` and zooms it as an overlay. Outside Herdr, it opens a separate Ghostty.app window on macOS. It never uses Neovim's embedded terminal.
 
-Press **Ctrl+Q** in tmd to quit and return to editing. The wrapper removes its snapshot and restores the originating Herdr pane and zoom state without closing other panes. Repeated Option+P reuses the existing snapshot rather than opening duplicates; quit it before previewing new edits. Temporary data is also cleaned up on launch failure, terminal close, and normal Neovim exit.
+Press **Ctrl+Q** in tmd to quit and return to editing. The wrapper removes its snapshot and restores the originating Herdr pane and zoom state without closing other panes. Repeated Space `m p` reuses the existing snapshot rather than opening duplicates; quit it before previewing new edits. Temporary data is also cleaned up on launch failure, terminal close, and normal Neovim exit.
 
-The source buffer, selection, mode, and files are not changed. Relative images and links resolve from the source file's directory, or Neovim's working directory for unnamed buffers. Documentation floats have no source-file base to recover. MDX is shown as Markdown, not executed as React. The mapping is offered in normal, insert, visual/select, operator-pending, command-line, and terminal modes without replacing existing mappings. Terminal buffers still receive the unsupported-buffer notice.
+The source buffer, selection, mode, and files are not changed. Relative images and links resolve from the source file's directory, or Neovim's working directory for unnamed buffers. Documentation floats have no source-file base to recover. MDX is shown as Markdown, not executed as React.
 
 The implementation lives in [`lua/config/tmd_preview.lua`](lua/config/tmd_preview.lua).
 

@@ -1216,7 +1216,9 @@ do
     end,
   })
 
-  vim.keymap.set({ 'n', 'x' }, '<C-.>', quick_fix, { desc = 'Code action -- quick fix for this line' })
+  for _, key in ipairs { '<leader>ca', '<C-.>' } do
+    vim.keymap.set({ 'n', 'x' }, key, quick_fix, { desc = 'Code action -- quick fix for this line' })
+  end
 
   -- Save rename edits without writing work that was already unsaved.
   local function install_rename_writeback()
@@ -1489,6 +1491,7 @@ do
   local rustup_ra = '/usr/lib/rustup/bin/rust-analyzer'
   vim.lsp.config('rust_analyzer', {
     cmd = { vim.fn.executable(rustup_ra) == 1 and rustup_ra or 'rust-analyzer' },
+    settings = { ['rust-analyzer'] = { check = { command = 'clippy' } } },
   })
   vim.lsp.enable('rust_analyzer')
 end

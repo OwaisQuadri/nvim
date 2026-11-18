@@ -83,7 +83,7 @@ check('keys.retained_custom_shortcuts', function()
   for _, key in ipairs {
     '<C-z>', '<C-S-z>', '<C-s>', '<C-[>', '<C-]>',
     '<C-h>', '<C-j>', '<C-k>', '<C-l>', '<C-e>', '<leader>a',
-    '<leader>sf', '<leader>sg', '<leader>sp', '<C-.>', 'yd', 'yD',
+    '<leader>sf', '<leader>sg', '<leader>sp', '<leader>ca', '<leader>mp', '<C-.>', 'yd', 'yD',
     '<leader>q', '<leader>u', '<leader>tm', '<leader>tc', '<leader>`',
     '[d', ']d', '<C-r>', '<C-b>', '<C-S-r>',
   } do
@@ -98,7 +98,7 @@ end)
 
 check('keys.removed_custom_aliases', function()
   for _, key in ipairs {
-    '<leader>ca', '<leader>co', '<leader>cm', '<leader>cf', '<leader>th',
+    '<leader>co', '<leader>cm', '<leader>cf', '<leader>th',
     '<leader>sw', '<leader>sh', '<leader>sk', '<leader>ss', '<leader>sd',
     '<leader>sr', '<leader>s.', '<leader>sc', '<leader>s/', '<leader>sn',
     '<leader><leader>', '<leader>tH', '<leader>xa', '<leader>xL',

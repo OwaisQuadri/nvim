@@ -167,15 +167,7 @@ function M.open(buf)
 end
 
 function M.setup()
-  for _, mode in ipairs { 'n', 'i', 'x', 's', 'o', 'c', 't' } do
-    if vim.fn.maparg('<M-p>', mode) == '' then
-      vim.keymap.set(mode, '<M-p>', function()
-        local buf = vim.api.nvim_get_current_buf()
-        vim.schedule(function() M.open(buf) end)
-        return ''
-      end, { expr = true, desc = 'Preview focused Markdown buffer with tmd' })
-    end
-  end
+  vim.keymap.set('n', '<leader>mp', function() M.open(vim.api.nvim_get_current_buf()) end, { desc = 'Preview focused Markdown buffer with tmd' })
   vim.api.nvim_create_autocmd('VimLeavePre', {
     group = vim.api.nvim_create_augroup('tmd-preview', { clear = true }),
     callback = dispose,
